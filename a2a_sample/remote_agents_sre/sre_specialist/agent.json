@@ -1,0 +1,34 @@
+{
+  "name": "sre_specialist",
+  "description": "Remote SRE & Cloud Infrastructure specialist reached over A2A. Reads and writes governed bi-temporal microservice and region topology facts in domain:t1:sre_infra.",
+  "supportedInterfaces": [
+    {
+      "url": "http://127.0.0.1:8091/a2a/sre_specialist",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "version": "1.0.0",
+  "provider": {
+    "organization": "adk-memory-platform",
+    "url": "http://127.0.0.1:8091"
+  },
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      "id": "sre_bitemporal_memory",
+      "name": "SRE Bi-Temporal Topology Memory",
+      "description": "Stores and queries microservice deployments, failovers, and database dependencies with point-in-time historical support.",
+      "tags": ["sre", "ontology", "bitemporal", "memory"],
+      "examples": [
+        "Remember: checkout-api is deployed in us-east-1 and reads from aurora-payments-01",
+        "Where is checkout-api currently deployed?"
+      ]
+    }
+  ]
+}

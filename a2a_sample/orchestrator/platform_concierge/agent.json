@@ -1,0 +1,34 @@
+{
+  "name": "platform_concierge",
+  "description": "Front-door A2A orchestrator that routes SRE questions to sre_specialist and Customer CRM questions to crm_specialist over A2A.",
+  "supportedInterfaces": [
+    {
+      "url": "http://127.0.0.1:8090/a2a/platform_concierge",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "version": "1.0.0",
+  "provider": {
+    "organization": "adk-memory-platform",
+    "url": "http://127.0.0.1:8090"
+  },
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      "id": "multi_domain_a2a_routing",
+      "name": "Multi-Domain A2A Routing",
+      "description": "Delegates SRE queries to sre_specialist and CRM queries to crm_specialist over A2A.",
+      "tags": ["orchestrator", "a2a", "routing"],
+      "examples": [
+        "Where is checkout-api deployed?",
+        "What subscription tier is Acme-Corp on?"
+      ]
+    }
+  ]
+}

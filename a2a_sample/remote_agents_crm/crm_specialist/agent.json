@@ -1,0 +1,34 @@
+{
+  "name": "crm_specialist",
+  "description": "Remote Customer CRM & Subscription specialist reached over A2A. Reads and writes governed customer account and subscription facts in domain:t1:customer_crm.",
+  "supportedInterfaces": [
+    {
+      "url": "http://127.0.0.1:8092/a2a/crm_specialist",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "version": "1.0.0",
+  "provider": {
+    "organization": "adk-memory-platform",
+    "url": "http://127.0.0.1:8092"
+  },
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      "id": "crm_account_memory",
+      "name": "Customer CRM Memory",
+      "description": "Stores and queries customer subscription tiers and support tickets in domain:t1:customer_crm.",
+      "tags": ["crm", "customer", "subscription", "memory"],
+      "examples": [
+        "Remember: Acme-Corp upgraded to Enterprise-Platinum",
+        "What subscription tier is Acme-Corp on?"
+      ]
+    }
+  ]
+}

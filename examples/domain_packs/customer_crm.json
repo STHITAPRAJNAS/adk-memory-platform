@@ -1,0 +1,35 @@
+{
+  "pack_id": "customer_crm@v2.0",
+  "domain_name": "customer_crm",
+  "version": "2.0.0",
+  "classes": {
+    "CustomerAccount": "p:Actor",
+    "SubscriptionPlan": "p:Concept",
+    "SupportTicket": "p:Event",
+    "AccountExecutive": "p:Actor"
+  },
+  "disjoint_classes": [
+    ["CustomerAccount", "SubscriptionPlan"]
+  ],
+  "relations": {
+    "SUBSCRIBED_TO_TIER": {
+      "predicate": "SUBSCRIBED_TO_TIER",
+      "domain_class": "CustomerAccount",
+      "range_class": "SubscriptionPlan",
+      "is_functional": true,
+      "description": "A customer has exactly one active subscription tier at a time"
+    },
+    "MANAGED_BY_AE": {
+      "predicate": "MANAGED_BY_AE",
+      "domain_class": "CustomerAccount",
+      "range_class": "AccountExecutive",
+      "is_functional": true
+    },
+    "OPENED_TICKET": {
+      "predicate": "OPENED_TICKET",
+      "domain_class": "CustomerAccount",
+      "range_class": "SupportTicket",
+      "is_functional": false
+    }
+  }
+}

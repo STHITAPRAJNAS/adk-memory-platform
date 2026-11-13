@@ -1,0 +1,74 @@
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix p:    <https://platform.enterprise.internal/ontology/upper#> .
+@prefix pay:  <https://platform.enterprise.internal/ontology/payments#> .
+
+# =====================================================================
+# 1. CLASSES & HIERARCHIES (RDFS + OWL, Subclassing Layer 0 Upper Ontology)
+# =====================================================================
+
+pay:Asset a owl:Class ;
+    rdfs:subClassOf p:Object ;
+    rdfs:label "Enterprise Asset" .
+
+pay:SoftwareAsset a owl:Class ;
+    rdfs:subClassOf pay:Asset .
+
+pay:InfrastructureAsset a owl:Class ;
+    rdfs:subClassOf pay:Asset .
+
+pay:Microservice a owl:Class ;
+    rdfs:subClassOf pay:SoftwareAsset ;
+    owl:disjointWith pay:Database, pay:EngineeringTeam .
+
+pay:Database a owl:Class ;
+    rdfs:subClassOf pay:InfrastructureAsset .
+
+pay:Region a owl:Class ;
+    rdfs:subClassOf p:Concept ;
+    rdfs:label "Cloud Deployment Region" .
+
+pay:EngineeringTeam a owl:Class ;
+    rdfs:subClassOf p:Actor ;
+    rdfs:label "Owning Engineering Squad" .
+
+# =====================================================================
+# 2. OBJECT PROPERTIES (Relationships / Edges between Entities)
+# =====================================================================
+
+# Functional Property: A Microservice can have at most ONE primary region
+pay:deployedInPrimary a owl:ObjectProperty, owl:FunctionalProperty ;
+    rdfs:label "DEPLOYED_IN_PRIMARY" ;
+    rdfs:domain pay:Microservice ;
+    rdfs:range  pay:Region .
+
+# Multi-Valued Property: A Microservice can read from multiple Databases
+pay:readsFrom a owl:ObjectProperty ;
+    rdfs:label "READS_FROM" ;
+    rdfs:domain pay:Microservice ;
+    rdfs:range  pay:Database .
+
+# Transitive Property: Asset dependency chain
+pay:dependsOn a owl:ObjectProperty, owl:TransitiveProperty ;
+    rdfs:label "DEPENDS_ON" ;
+    rdfs:domain pay:Asset ;
+    rdfs:range  pay:Asset .
+
+pay:ownedBy a owl:ObjectProperty, owl:FunctionalProperty ;
+    rdfs:label "OWNED_BY" ;
+    rdfs:domain pay:Asset ;
+    rdfs:range  pay:EngineeringTeam .
+
+# =====================================================================
+# 3. DATATYPE PROPERTIES (Literal Attributes on a Node)
+# =====================================================================
+
+pay:tierLevel a owl:DatatypeProperty ;
+    rdfs:domain pay:Microservice ;
+    rdfs:range  xsd:integer .
+
+pay:canonicalName a owl:DatatypeProperty ;
+    rdfs:domain owl:Thing ;
+    rdfs:range  xsd:string .

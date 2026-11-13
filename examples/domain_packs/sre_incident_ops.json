@@ -1,0 +1,53 @@
+{
+  "pack_id": "sre_infra@v1.2",
+  "domain_name": "sre_infra",
+  "version": "1.2.0",
+  "classes": {
+    "Asset": "p:Object",
+    "SoftwareAsset": "Asset",
+    "InfrastructureAsset": "Asset",
+    "Microservice": "SoftwareAsset",
+    "DatabaseCluster": "InfrastructureAsset",
+    "CloudRegion": "p:Concept",
+    "EngineeringSquad": "p:Actor",
+    "Incident": "p:Event"
+  },
+  "disjoint_classes": [
+    ["Microservice", "DatabaseCluster"],
+    ["Microservice", "EngineeringSquad"]
+  ],
+  "relations": {
+    "DEPLOYED_IN_PRIMARY": {
+      "predicate": "DEPLOYED_IN_PRIMARY",
+      "domain_class": "Microservice",
+      "range_class": "CloudRegion",
+      "is_functional": true,
+      "description": "At most 1 active primary region per microservice"
+    },
+    "READS_FROM": {
+      "predicate": "READS_FROM",
+      "domain_class": "Microservice",
+      "range_class": "DatabaseCluster",
+      "is_functional": false
+    },
+    "DEPENDS_ON": {
+      "predicate": "DEPENDS_ON",
+      "domain_class": "Asset",
+      "range_class": "Asset",
+      "is_functional": false,
+      "is_transitive": true
+    },
+    "OWNED_BY": {
+      "predicate": "OWNED_BY",
+      "domain_class": "Asset",
+      "range_class": "EngineeringSquad",
+      "is_functional": true
+    },
+    "IMPACTS_ASSET": {
+      "predicate": "IMPACTS_ASSET",
+      "domain_class": "Incident",
+      "range_class": "Asset",
+      "is_functional": false
+    }
+  }
+}

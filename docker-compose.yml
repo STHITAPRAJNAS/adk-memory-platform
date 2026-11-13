@@ -1,0 +1,51 @@
+services:
+  postgres-pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: adk-memory-postgres
+    environment:
+      POSTGRES_USER: platform_admin
+      POSTGRES_PASSWORD: platform_secret
+      POSTGRES_DB: adk_memory_platform
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./docs/sql/001_postgres_rls_and_partitions.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform_admin -d adk_memory_platform"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  neo4j-graph:
+    image: neo4j:5-community
+    container_name: adk-memory-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/platform_secret
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis-cache:
+    image: redis:7-alpine
+    container_name: adk-memory-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+volumes:
+  pgdata:
+  neo4jdata:

@@ -1,0 +1,31 @@
+{
+  "pack_id": "clinical_trials@v1.0",
+  "domain_name": "clinical_trials",
+  "version": "1.0.0",
+  "classes": {
+    "ClinicalTrial": "p:Event",
+    "TherapeuticCompound": "p:Object",
+    "TrialPhase": "p:Concept",
+    "ResearchSite": "p:Actor"
+  },
+  "relations": {
+    "CURRENT_PHASE": {
+      "predicate": "CURRENT_PHASE",
+      "domain_class": "ClinicalTrial",
+      "range_class": "TrialPhase",
+      "is_functional": true
+    },
+    "EVALUATES_COMPOUND": {
+      "predicate": "EVALUATES_COMPOUND",
+      "domain_class": "ClinicalTrial",
+      "range_class": "TherapeuticCompound",
+      "is_functional": false
+    },
+    "CONDUCTED_AT_SITE": {
+      "predicate": "CONDUCTED_AT_SITE",
+      "domain_class": "ClinicalTrial",
+      "range_class": "ResearchSite",
+      "is_functional": false
+    }
+  }
+}

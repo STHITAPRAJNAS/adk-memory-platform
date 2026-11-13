@@ -1,0 +1,41 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix pay:  <https://platform.enterprise.internal/ontology/payments#> .
+
+# =====================================================================
+# SHACL NODE SHAPE: Enforces strict closed-world write contracts
+# =====================================================================
+
+pay:MicroserviceShape a sh:NodeShape ;
+    sh:targetClass pay:Microservice ;
+    sh:closed false ;
+
+    sh:property [
+        sh:path pay:canonicalName ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:minLength 3 ;
+        sh:message "Every Microservice must have exactly one canonicalName string." ;
+    ] ;
+
+    sh:property [
+        sh:path pay:deployedInPrimary ;
+        sh:class pay:Region ;
+        sh:maxCount 1 ;
+        sh:message "Cardinality violation: A Microservice cannot have more than 1 active primary region." ;
+    ] ;
+
+    sh:property [
+        sh:path pay:readsFrom ;
+        sh:class pay:Database ;
+        sh:message "Range violation: pay:readsFrom target must be an instance of pay:Database." ;
+    ] ;
+
+    sh:property [
+        sh:path pay:tierLevel ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 0 ;
+        sh:maxInclusive 3 ;
+        sh:maxCount 1 ;
+    ] .

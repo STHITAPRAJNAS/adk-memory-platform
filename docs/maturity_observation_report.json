@@ -1,0 +1,44 @@
+{
+  "llm_mode": "DETERMINISTIC_ENTERPRISE_SIMULATION",
+  "embedding_model": "DeterministicHashEmbeddingAdapter (1536d)",
+  "latency_benchmarks_ms": {
+    "hot_path_ingest_ms": 315.11,
+    "sleep_time_ingest_ms": 9.08,
+    "multihop_recall_ms": 40.04,
+    "playbook_recall_ms": 4.86,
+    "maintenance_compaction_ms": 20.14
+  },
+  "maturity_checks": {
+    "entity_resolution_guard_sibling_separation": true,
+    "bitemporal_functional_failover_active_eu_central_1": true,
+    "multihop_dependency_preservation": true,
+    "cross_app_user_preference_recall": true,
+    "pii_and_bearer_token_redacted": true,
+    "steward_auto_functional_cost_center_invalidation": true,
+    "bottom_up_ontology_evolution_promoted_classes": [
+      "p:Actor",
+      "p:Event",
+      "p:Object",
+      "p:Concept",
+      "CloudRegion",
+      "Microservice",
+      "DatabaseCluster",
+      "p:UserPreference",
+      "p:CandidateConcept",
+      "ZeroDayVulnerability"
+    ],
+    "cross_tenant_zero_leakage": true,
+    "playbook_reinforcement_count": 2
+  },
+  "sample_sre_commander_context_window": "[ACTIVE_ONTOLOGY_GRAPH_FACTS]\n- [user:t_bench:alice_vp] (alice_vp) -[PREFERS]-> (UTC-Executive-Bullets): alice_vp prefers concise executive bullet points in UTC timezone [valid_from=2026-11-13T18:51:26.319349+00:00]\n- [domain:t_bench:sre_infra] (payment-router-01) -[MITIGATED_BY_WAF_RULE]-> (CVE-2026-9981): payment-router-01 mitigated CVE-2026-9981 via Envoy WAF rule [valid_from=2026-11-13T18:51:26.540827+00:00]\n- [domain:t_bench:sre_infra] (api-edge-gw) -[DEPENDS_ON]-> (payment-router-01): api-edge-gw routes checkout traffic to payment-router-01 [valid_from=2026-01-10T00:00:00Z]\n- [domain:t_bench:sre_infra] (payment-router-01) -[DEPLOYED_IN_PRIMARY]-> (eu-central-1): payment-router-01 failed over to eu-central-1 after user confirmation [valid_from=2026-11-12T14:30:00Z]\n- [domain:t_bench:sre_infra] (payment-router-01) -[READS_FROM]-> (aurora-ledger-01): payment-router-01 reads and writes ledger entries to aurora-ledger-01 [valid_from=2026-01-10T00:00:00Z]\n- [domain:t_bench:sre_infra] (payment-router-02) -[DEPLOYED_IN_PRIMARY]-> (eu-west-1): payment-router-02 canary region is eu-west-1 [valid_from=2026-01-10T00:00:00Z]\n\nShould we drain us-east-1 and fail payment-router-01 over to eu-central-1?\nIncident Report (Auth token [REDACTED_SECRET], Customer SSN [REDACTED_SSN]): api-edge-gw routes traffic to payment-router-01. payment-router-01 is deployed in us-east-1 and reads from aurora-ledger-01, while canary payment-router-02 is deployed in eu-west-1.\nYes, fail payment-router-01 over to eu-central-1 immediately.\nPost-incident telemetry: p99 latency stabilized at 18ms.",
+  "sample_finops_context_window": "[ACTIVE_ONTOLOGY_GRAPH_FACTS]\n- [user:t_bench:alice_vp] (alice_vp) -[PREFERS]-> (UTC-Executive-Bullets): alice_vp prefers concise executive bullet points in UTC timezone [valid_from=2026-11-13T18:51:26.319349+00:00]\n- [domain:t_bench:finops] (payment-router-01) -[OWNED_BY_PRIMARY]-> (CC-209-Global): payment-router-01 budget transferred to CC-209-Global [valid_from=2026-11-10T00:00:00Z]\n\nWorkload payment-router-01 was transferred to cost center CC-209-Global on 2026-11-10.\nWorkload payment-router-01 is owned by cost center CC-104-Core as of 2026-01-01.\nNote for alice_vp: I always prefer concise executive bullet points in UTC timezone.",
+  "maintenance_stats": {
+    "sleep_time_extracted_batches": 1,
+    "sleep_time_extracted_episodes": 1,
+    "pruned_ephemeral_episodes": 0,
+    "compacted_raw_episodes": 0,
+    "summaries_created": 0,
+    "pruned_low_confidence_overflow_edges": 0,
+    "synthesized_entity_dossiers": 0
+  }
+}
