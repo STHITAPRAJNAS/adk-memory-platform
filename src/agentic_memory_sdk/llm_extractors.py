@@ -13,8 +13,6 @@ import httpx
 from .auth import AwsIamDatabaseAuthProvider, CloudAuthProvider
 from .models import (
     CompiledTBox,
-    ExtractedEntity,
-    ExtractedFact,
     ExtractionPayload,
 )
 from .ports import EmbeddingAdapter, OntologyExtractorAdapter

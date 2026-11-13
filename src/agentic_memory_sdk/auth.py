@@ -219,7 +219,6 @@ class AwsIamDatabaseAuthProvider(CachedTokenAuthProviderBase):
                 Region=self.region,
             )
         # ElastiCache / MemoryDB IAM auth uses a SigV4 presigned URL token
-        from botocore.awsrequest import AWSRequest
         from botocore.signers import RequestSigner
 
         credentials = session.get_credentials().get_frozen_credentials()

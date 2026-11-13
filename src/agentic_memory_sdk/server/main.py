@@ -9,12 +9,10 @@ from ..adapters import (
     PostgresGraphAdapter,
     PostgresPgVectorAdapter,
     PostgresPlaybookAdapter,
-    PostgresUnifiedAdapter,
     RedisEpisodicAndSeedAdapter,
     RedisGraphAdapter,
     RedisPlaybookAndWorkingAdapter,
     RedisRegistryAdapter,
-    RedisUnifiedAdapter,
 )
 from ..governance import PlatformOntologyRegistrar
 from ..llm_extractors import (
