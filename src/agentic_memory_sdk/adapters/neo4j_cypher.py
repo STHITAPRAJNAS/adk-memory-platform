@@ -31,11 +31,13 @@ class Neo4jGraphAdapter(NeptuneOpenCypherAdapter):
         self.bearer_token = bearer_token
         self.tls_config = tls_config
         self._driver: Any = None
+        self._indexes_ensured: bool = False
 
     async def close(self) -> None:
         if self._driver is not None:
             await self._driver.close()
             self._driver = None
+            self._indexes_ensured = False
 
     async def _run_cypher(
         self, tenant_id: str, query: str, params: dict[str, Any]
@@ -59,6 +61,17 @@ class Neo4jGraphAdapter(NeptuneOpenCypherAdapter):
             ):
                 driver_kwargs["encrypted"] = True
             self._driver = AsyncGraphDatabase.driver(self.uri, **driver_kwargs)
+
+        if not self._indexes_ensured:
+            self._indexes_ensured = True
+            try:
+                async with self._driver.session(database=self.database) as idx_session:
+                    await idx_session.run(
+                        "CREATE INDEX entity_tenant_vid IF NOT EXISTS FOR (n:Entity) ON (n.tenant_id, n.vertex_id)"
+                    )
+            except Exception:
+                pass
+
         neo_query = query.replace("`~id`", "vertex_id")
         async with self._driver.session(database=self.database) as session:
             result = await session.run(neo_query, parameters=params)

@@ -636,6 +636,13 @@ async def run_realistic_enterprise_maturity_benchmark(
                     "payment-router-01" not in rival_combined
                     and "CC-209-Global" not in rival_combined
                 ),
+                "matched_procedural_playbook_in_context": (
+                    "[MATCHED_PROCEDURAL_PLAYBOOKS]" in sre_combined
+                ),
+                "postgres_neo4j_maintenance_compaction_and_dossiers": (
+                    maint_stats["compacted_raw_episodes"] >= 2
+                    and maint_stats["synthesized_entity_dossiers"] >= 3
+                ),
                 "playbook_reinforcement_count": pb.success_count,
             },
             "sample_sre_commander_context_window": sre_combined,

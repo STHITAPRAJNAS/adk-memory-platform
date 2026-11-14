@@ -258,11 +258,19 @@ class CompositeMemoryService(BaseMemoryService):
             )
 
             name_to_vertex_id: dict[str, str] = {}
-            for ent, target_ns in routed_entities:
-                clean_summary = PIIScrubber.scrub(ent.summary)
-                ent_vec = await self.embedder.embed(
-                    f"{ent.canonical_name}: {clean_summary}"
+            cleaned_entities = [
+                (ent, target_ns, PIIScrubber.scrub(ent.summary))
+                for ent, target_ns in routed_entities
+            ]
+            ent_vectors = await asyncio.gather(
+                *(
+                    self.embedder.embed(f"{ent.canonical_name}: {clean_summary}")
+                    for ent, _target_ns, clean_summary in cleaned_entities
                 )
+            )
+            for (ent, target_ns, clean_summary), ent_vec in zip(
+                cleaned_entities, ent_vectors
+            ):
                 existing_vid = await self.seed_store.resolve_existing_vertex_id(
                     ctx, ent.entity_class, ent.canonical_name, ent_vec
                 )
@@ -621,7 +629,7 @@ class CompositeMemoryService(BaseMemoryService):
         target_ns = ctx.write_namespace if share_in_domain else ctx.app_private_namespace
         clean_intent = PIIScrubber.scrub(trigger_intent)
         clean_res = PIIScrubber.scrub(resolution_summary)
-        vec = await self.embedder.embed(f"{clean_intent}: {clean_res}")
+        vec = await self.embedder.embed(clean_intent)
         pb = PlaybookRecord(
             tenant_id=ctx.tenant_id,
             namespace=target_ns,
@@ -892,6 +900,62 @@ class CompositeMemoryService(BaseMemoryService):
                 sleep_time_extracted_batches += 1
                 sleep_time_extracted_episodes += len(rows_group)
 
+            # 3. Compact verbose multi-turn sessions in PostgreSQL
+            async with pool.acquire() as conn:
+                non_sum_rows = await conn.fetch(
+                    """
+                    SELECT episode_id::text, tenant_id, app_name, user_id, session_id,
+                           namespace, author, content_text, custom_metadata
+                    FROM episodic_memories
+                    WHERE COALESCE(custom_metadata->>'is_summary', 'false') != 'true'
+                    ORDER BY created_at ASC
+                    """
+                )
+            pg_groups: dict[tuple[str, str, str, str], list[Any]] = defaultdict(list)
+            for r in non_sum_rows:
+                pg_groups[
+                    (r["tenant_id"], r["app_name"], r["user_id"], r["session_id"])
+                ].append(r)
+
+            for (t_id, a_name, u_id, s_id), group in pg_groups.items():
+                if len(group) >= min_episodes_to_compact:
+                    bullet_points = " | ".join(
+                        f"{r['author']}: {str(r['content_text']).strip()}"
+                        for r in group
+                    )
+                    summary_text = f"[AUTO_SESSION_SUMMARY ({len(group)} turns)]: {bullet_points[:600]}"
+                    sum_vec = await self.embedder.embed(summary_text)
+                    summary_ep = EpisodicRecord(
+                        tenant_id=t_id,
+                        app_name=a_name,
+                        user_id=u_id,
+                        session_id=s_id,
+                        namespace=group[0]["namespace"],
+                        author="memory_compactor",
+                        content_text=summary_text,
+                        embedding=sum_vec,
+                        metadata={
+                            "is_summary": True,
+                            "compacted_count": len(group),
+                            "source_episode_ids": [r["episode_id"] for r in group],
+                        },
+                    )
+                    ctx = await self.registry.resolve_context(t_id, a_name, u_id)
+                    await self.seed_store.commit_episodes_and_outbox(
+                        ctx, [summary_ep], [], None
+                    )
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            """
+                            DELETE FROM episodic_memories
+                            WHERE tenant_id = $1 AND episode_id = ANY($2::uuid[])
+                            """,
+                            t_id,
+                            [r["episode_id"] for r in group],
+                        )
+                    compacted_episodes += len(group)
+                    summaries_created += 1
+
         if hasattr(self.graph, "edges"):
             edges_list: list[dict[str, Any]] = getattr(self.graph, "edges")
             kept_edges: list[dict[str, Any]] = []
@@ -902,6 +966,22 @@ class CompositeMemoryService(BaseMemoryService):
                 else:
                     kept_edges.append(edge)
             setattr(self.graph, "edges", kept_edges)
+        elif hasattr(self.graph, "_run_cypher"):
+            pruned_rows = await getattr(self.graph, "_run_cypher")(
+                self.default_tenant_id,
+                """
+                MATCH ()-[r:RELATES]->()
+                WHERE r.namespace STARTS WITH 'app:'
+                  AND r.predicate = 'RELATED_TO'
+                  AND coalesce(r.confidence, 1.0) < $min_conf
+                WITH r
+                DELETE r
+                RETURN count(*) AS pruned
+                """,
+                {"min_conf": min_overflow_confidence},
+            )
+            if pruned_rows:
+                pruned_overflow_edges += int(pruned_rows[0].get("pruned", 0))
 
         # Step 4 (Graphiti Gc / Letta Sleep-Time Compute): Synthesize Layer 3 Entity Dossiers
         # Enriches each seed vertex's summary with its active 1-hop relational neighborhood
@@ -933,6 +1013,53 @@ class CompositeMemoryService(BaseMemoryService):
                     dossier_str = ", ".join(dict.fromkeys(rel_strs[:5]))
                     seed.summary = f"{base_summary} [Dossier: {dossier_str}]"
                     synthesized_dossiers += 1
+        elif hasattr(self.seed_store, "_get_pool") and hasattr(self.graph, "_run_cypher"):
+            from collections import defaultdict
+
+            pool = await getattr(self.seed_store, "_get_pool")()
+            cypher_rels = await getattr(self.graph, "_run_cypher")(
+                self.default_tenant_id,
+                """
+                MATCH (s:Entity)-[r:RELATES {t_invalid: 'ACTIVE'}]->(t:Entity)
+                RETURN s.tenant_id AS tenant_id,
+                       s.`~id` AS src_vid,
+                       r.predicate AS pred,
+                       t.canonical_name AS tgt_name
+                """,
+                {},
+            )
+            pg_rels_by_vid: dict[tuple[str, str], list[str]] = defaultdict(list)
+            for row in cypher_rels:
+                if row.get("tenant_id") and row.get("src_vid") and row.get("tgt_name"):
+                    pg_rels_by_vid[(str(row["tenant_id"]), str(row["src_vid"]))].append(
+                        f"{row['pred']}->{row['tgt_name']}"
+                    )
+            if pg_rels_by_vid:
+                async with pool.acquire() as conn:
+                    for (t_id, vid), rel_strs in pg_rels_by_vid.items():
+                        row = await conn.fetchrow(
+                            """
+                            SELECT summary_text FROM graph_seed_index
+                            WHERE tenant_id = $1 AND neptune_vertex_id = $2
+                            """,
+                            t_id,
+                            vid,
+                        )
+                        if row:
+                            base_summary = str(row["summary_text"]).split(" [Dossier:")[0].strip()
+                            dossier_str = ", ".join(dict.fromkeys(rel_strs[:5]))
+                            new_summary = f"{base_summary} [Dossier: {dossier_str}]"
+                            await conn.execute(
+                                """
+                                UPDATE graph_seed_index
+                                SET summary_text = $3
+                                WHERE tenant_id = $1 AND neptune_vertex_id = $2
+                                """,
+                                t_id,
+                                vid,
+                                new_summary,
+                            )
+                            synthesized_dossiers += 1
 
         return {
             "sleep_time_extracted_batches": sleep_time_extracted_batches,

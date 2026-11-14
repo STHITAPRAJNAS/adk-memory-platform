@@ -5,6 +5,13 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-11-14
+
+### Fixed & Optimized
+- **Batched Cypher Edge Mutations & Neo4j Composite Index**: Replaced per-edge Cypher loops in `NeptuneOpenCypherAdapter` / `Neo4jGraphAdapter` with single-round-trip `UNWIND $edges` and `UNWIND $func_edges` batches, and auto-created `:Entity(tenant_id, vertex_id)` composite index on Neo4j initialization.
+- **Complete Live PostgreSQL + Neo4j Maintenance Wiring**: Wired raw episode session compaction (`[AUTO_SESSION_SUMMARY]`), Cypher low-confidence overflow edge pruning, and Layer-3 Entity Dossier synthesis (`[Dossier: ...]`) in `run_memory_maintenance()` for production PostgreSQL and Neo4j/Neptune stores.
+- **Parallel Entity Embedding & Playbook Context Injection**: Parallelized entity embedding generation during extraction via `asyncio.gather` and aligned `register_playbook` trigger intent embeddings so `search_memory()` automatically injects `[MATCHED_PROCEDURAL_PLAYBOOKS]` into the recalled context window.
+
 ## [0.1.1] - 2026-11-14
 
 ### Changed

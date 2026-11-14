@@ -89,72 +89,63 @@ class NeptuneOpenCypherAdapter(GraphStoreAdapter):
                 {"vertices": vertex_dicts},
             )
 
-        for e in edges:
-            if e.is_functional:
-                # Close t_invalid on any prior active functional edge with a different target
-                await self._run_cypher(
-                    tenant_id,
-                    """
-                    MATCH (s:Entity {`~id`: $src_id, tenant_id: $tenant_id})
-                          -[r:RELATES {predicate: $pred, namespace: $ns, t_invalid: 'ACTIVE'}]->
-                          (old_t:Entity)
-                    WHERE old_t.`~id` <> $tgt_id
-                    SET r.t_invalid = $t_valid
-                    """,
-                    {
-                        "src_id": e.source_vertex_id,
-                        "tenant_id": tenant_id,
-                        "pred": e.predicate,
-                        "ns": e.namespace,
-                        "tgt_id": e.target_vertex_id,
-                        "t_valid": e.t_valid,
-                    },
-                )
+        if not edges:
+            return
 
+        func_edges = [e.model_dump() for e in edges if e.is_functional]
+        if func_edges:
+            # Close t_invalid on any prior active functional edges in a single UNWIND batch
             await self._run_cypher(
                 tenant_id,
                 """
-                MATCH (s:Entity {`~id`: $src_id, tenant_id: $tenant_id})
-                MATCH (t:Entity {`~id`: $tgt_id, tenant_id: $tenant_id})
-                MERGE (s)-[r:RELATES {
-                    predicate: $pred,
-                    namespace: $ns,
-                    tenant_id: $tenant_id,
-                    t_invalid: 'ACTIVE'
-                }]->(t)
-                ON CREATE SET r.edge_id = $edge_id,
-                              r.t_valid = $t_valid,
-                              r.t_created = $t_created,
-                              r.fact_summary = $summary,
-                              r.confidence = $conf,
-                              r.reinforcement_count = 1,
-                              r.source_episode_id = $ep_id,
-                              r.source_app = $app,
-                              r.user_id = $uid
-                ON MATCH SET  r.fact_summary = $summary,
-                              r.reinforcement_count = coalesce(r.reinforcement_count, 1) + 1,
-                              r.confidence = CASE
-                                  WHEN coalesce(r.confidence, 0.9) + 0.03 > 1.0 THEN 1.0
-                                  ELSE coalesce(r.confidence, 0.9) + 0.03
-                              END,
-                              r.updated_at = $t_valid
+                UNWIND $func_edges AS fe
+                MATCH (s:Entity {`~id`: fe.source_vertex_id, tenant_id: $tenant_id})
+                      -[r:RELATES {predicate: fe.predicate, namespace: fe.namespace, t_invalid: 'ACTIVE'}]->
+                      (old_t:Entity)
+                WHERE old_t.`~id` <> fe.target_vertex_id
+                SET r.t_invalid = fe.t_valid
                 """,
                 {
-                    "src_id": e.source_vertex_id,
-                    "tgt_id": e.target_vertex_id,
                     "tenant_id": tenant_id,
-                    "pred": e.predicate,
-                    "ns": e.namespace,
-                    "edge_id": e.edge_id,
-                    "t_valid": e.t_valid,
-                    "t_created": e.t_created,
-                    "summary": e.fact_summary,
-                    "conf": e.confidence,
-                    "ep_id": e.source_episode_id,
-                    "app": e.source_app,
-                    "uid": e.user_id,
+                    "func_edges": func_edges,
                 },
             )
+
+        edge_dicts = [e.model_dump() for e in edges]
+        await self._run_cypher(
+            tenant_id,
+            """
+            UNWIND $edges AS e
+            MATCH (s:Entity {`~id`: e.source_vertex_id, tenant_id: $tenant_id})
+            MATCH (t:Entity {`~id`: e.target_vertex_id, tenant_id: $tenant_id})
+            MERGE (s)-[r:RELATES {
+                predicate: e.predicate,
+                namespace: e.namespace,
+                tenant_id: $tenant_id,
+                t_invalid: 'ACTIVE'
+            }]->(t)
+            ON CREATE SET r.edge_id = e.edge_id,
+                          r.t_valid = e.t_valid,
+                          r.t_created = e.t_created,
+                          r.fact_summary = e.fact_summary,
+                          r.confidence = e.confidence,
+                          r.reinforcement_count = 1,
+                          r.source_episode_id = e.source_episode_id,
+                          r.source_app = e.source_app,
+                          r.user_id = e.user_id
+            ON MATCH SET  r.fact_summary = e.fact_summary,
+                          r.reinforcement_count = coalesce(r.reinforcement_count, 1) + 1,
+                          r.confidence = CASE
+                              WHEN coalesce(r.confidence, 0.9) + 0.03 > 1.0 THEN 1.0
+                              ELSE coalesce(r.confidence, 0.9) + 0.03
+                          END,
+                          r.updated_at = e.t_valid
+            """,
+            {
+                "tenant_id": tenant_id,
+                "edges": edge_dicts,
+            },
+        )
 
     async def expand_active_subgraph(
         self,
