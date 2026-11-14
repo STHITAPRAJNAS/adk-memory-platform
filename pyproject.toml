@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agentic-memory-sdk"
+name = "agentic-composite-memory"
 version = "0.1.0"
 description = "Enterprise Multi-Tenant Ontology-Grounded Composite Memory SDK, MCP Server & Platform Service for Google ADK Agents"
 readme = "README.md"
@@ -99,11 +99,12 @@ select = ["E", "F"]
 ignore = ["E501"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentic_memory_sdk"]
+packages = ["src/agentic_memory_sdk", "src/agentic_composite_memory"]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "src/agentic_memory_sdk/**",
+    "src/agentic_composite_memory/**",
     "README.md",
     "LICENSE",
     "pyproject.toml",

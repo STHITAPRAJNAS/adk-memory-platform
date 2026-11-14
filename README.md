@@ -1,4 +1,4 @@
-# Agentic Memory SDK (`agentic-memory-sdk`)
+# Agentic Composite Memory (`agentic-composite-memory`)
 
 An enterprise-grade, **domain-agnostic**, multi-tenant **Composite Memory SDK, FastAPI Service & MCP Server** engineered for **Google Agent Development Kit (ADK)** and multi-agent A2A ecosystems.
 
@@ -8,13 +8,13 @@ An enterprise-grade, **domain-agnostic**, multi-tenant **Composite Memory SDK, F
 
 ```bash
 # Core SDK, ADK Integration, FastAPI + MCP Server, Postgres/Redis/Neo4j adapters
-pip install agentic-memory-sdk
+pip install agentic-composite-memory
 
 # With Cloud IAM Auth & Bedrock / Cloud extras
-pip install "agentic-memory-sdk[aws,gcp,azure,ontology]"
+pip install "agentic-composite-memory[aws,gcp,azure,ontology]"
 
 # Everything included
-pip install "agentic-memory-sdk[all]"
+pip install "agentic-composite-memory[all]"
 ```
 
 ---
