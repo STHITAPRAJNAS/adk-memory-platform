@@ -12,7 +12,6 @@ from agentic_composite_memory import (
     DomainPackLoader,
     ExtractedEntity,
     ExtractedFact,
-    ExtractionMode,
     ExtractionPayload,
     GovernanceTier,
     InMemoryUnifiedAdapter,

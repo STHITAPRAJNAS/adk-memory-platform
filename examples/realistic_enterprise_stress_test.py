@@ -24,7 +24,6 @@ from agentic_memory_sdk import (
     Neo4jGraphAdapter,
     PlatformOntologyRegistrar,
     PostgresPgVectorAdapter,
-    ReasoningTraceStep,
     RedisPlaybookAndWorkingAdapter,
     RelationRule,
     RuleBasedMockExtractorAdapter,
@@ -511,7 +510,7 @@ async def run_realistic_enterprise_maturity_benchmark(
                     )
                 ],
             )
-        evolution_audit = await service.evolve_app_ontology_from_overflow(
+        await service.evolve_app_ontology_from_overflow(
             "t_bench:secops_auditor",
             min_confidence_to_promote=0.85,
             registrar=registrar,

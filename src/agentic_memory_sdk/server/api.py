@@ -92,26 +92,60 @@ def create_memory_platform_app(
     from a single ASGI process / Kubernetes Pod.
     """
 
+    ont_registrar = registrar or PlatformOntologyRegistrar(service.registry)
+    mcp_tools = (
+        MemoryMcpServerTools(service=service, registrar=ont_registrar)
+        if mount_mcp
+        else None
+    )
+    mcp_server = (
+        create_mcp_server(service=service, registrar=ont_registrar)
+        if mount_mcp
+        else None
+    )
+    mcp_http_app: Any = None
+    if mount_mcp and mcp_server is not None and hasattr(mcp_server, "streamable_http_app"):
+        try:
+            from mcp.server.transport_security import TransportSecuritySettings
+
+            sec = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+            mcp_http_app = mcp_server.streamable_http_app(
+                streamable_http_path="/",
+                stateless_http=True,
+                json_response=True,
+                transport_security=sec,
+            )
+        except TypeError:
+            mcp_http_app = mcp_server.streamable_http_app()
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if enable_outbox_worker:
             await service.start_outbox_worker(interval_sec=outbox_interval_sec)
         try:
-            yield
+            if (
+                mcp_server is not None
+                and hasattr(mcp_server, "session_manager")
+                and getattr(mcp_server.session_manager, "_task_group", None) is None
+            ):
+                mcp_server.session_manager._has_started = False
+                async with mcp_server.session_manager.run():
+                    yield
+            else:
+                yield
         finally:
             if enable_outbox_worker:
                 await service.stop_outbox_worker()
 
     app = FastAPI(
         title="ADK Enterprise Composite Memory Platform API",
-        version="0.1.0",
+        version="0.1.3",
         description=(
             "Domain-Agnostic Multi-Tenant Memory Service combining Episodic Memory, "
             "Stratified Ontology (TBox), Bi-Temporal Graph KB (ABox), and Reasoning Traces."
         ),
         lifespan=lifespan,
     )
-    ont_registrar = registrar or PlatformOntologyRegistrar(service.registry)
 
     @app.get("/health")
     @app.get("/healthz")
@@ -354,21 +388,28 @@ def create_memory_platform_app(
     # ------------------------------------------------------------------------
     # UNIFIED MCP LAYER: Co-hosted MCP SSE, Streamable HTTP & Stateless Tool RPC
     # ------------------------------------------------------------------------
-    if mount_mcp:
-        mcp_tools = MemoryMcpServerTools(service=service, registrar=ont_registrar)
-        mcp_server = create_mcp_server(service=service, registrar=ont_registrar)
+    if mount_mcp and mcp_tools is not None and mcp_server is not None:
 
         @app.get("/v1/mcp/tools")
         async def list_mcp_tools() -> dict[str, Any]:
-            """Lists all MCP tools exposed by this unified Memory Platform pod."""
+            """Lists all MCP tools, resources, prompts, and protocol versions exposed by this pod."""
             return {
                 "server_name": "adk-composite-memory",
+                "protocol_version": "2026-07-28",
+                "supported_protocol_versions": [
+                    "2026-07-28",
+                    "2025-11-25",
+                    "2025-06-18",
+                    "2025-03-26",
+                ],
                 "transports": {
                     "sse": "/mcp/sse",
                     "streamable_http": "/mcp/http",
                     "stateless_rpc": "/v1/mcp/call",
                 },
                 "tools": MemoryMcpServerTools.TOOL_NAMES,
+                "resources": MemoryMcpServerTools.RESOURCE_URIS,
+                "prompts": MemoryMcpServerTools.PROMPT_NAMES,
             }
 
         @app.post("/v1/mcp/call")
@@ -384,7 +425,17 @@ def create_memory_platform_app(
 
         if hasattr(mcp_server, "sse_app"):
             app.mount("/mcp/sse", mcp_server.sse_app())
-        if hasattr(mcp_server, "streamable_http_app"):
-            app.mount("/mcp/http", mcp_server.streamable_http_app())
+        if mcp_http_app is not None:
+            async def _auto_lifespan_mcp_http(scope: Any, receive: Any, send: Any) -> None:
+                sm = getattr(mcp_server, "session_manager", None)
+                if sm is not None and getattr(sm, "_task_group", None) is None:
+                    sm._has_started = False
+                    async with sm.run():
+                        await mcp_http_app(scope, receive, send)
+                    sm._has_started = False
+                else:
+                    await mcp_http_app(scope, receive, send)
+
+            app.mount("/mcp/http", _auto_lifespan_mcp_http)
 
     return app

@@ -1,6 +1,6 @@
 # Agentic Composite Memory (`agentic-composite-memory`)
 
-An enterprise-grade, **domain-agnostic**, multi-tenant **Composite Memory SDK, FastAPI Service & MCP Server** engineered for **Google Agent Development Kit (ADK)** and multi-agent A2A ecosystems.
+An enterprise-grade, **domain-agnostic**, multi-tenant **Composite Memory SDK, FastAPI Service & Model Context Protocol (MCP) Server** engineered for **Google Agent Development Kit (ADK)** and multi-agent A2A ecosystems.
 
 [![PyPI version](https://img.shields.io/pypi/v/agentic-composite-memory.svg)](https://pypi.org/project/agentic-composite-memory/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/agentic-composite-memory.svg)](https://pypi.org/project/agentic-composite-memory/)
@@ -13,8 +13,8 @@ An enterprise-grade, **domain-agnostic**, multi-tenant **Composite Memory SDK, F
 - **[Documentation Index](./docs/README.md)**
 - **[Architecture, 3-Layer Ontology & 3-Tier Context Graph Guide](./docs/architecture_and_ontology_guide.md)**
 - **[Real-World Usage, Retail/SRE Domain Suites & The 3 Agent Consumption Patterns (SDK, FastAPI, MCP)](./docs/real_world_usage_and_recipes.md)**
+- **[FastAPI REST, MCP Protocol (`2026-07-28` / `2025-11-25`) & CLI Reference](./docs/api_and_mcp_reference.md)**
 - **[Local Setup, Docker Stack & PyPI Testing Guide](./docs/local_setup_and_testing.md)**
-- **[FastAPI REST, MCP Server & CLI Reference](./docs/api_and_mcp_reference.md)**
 - **[PostgreSQL RLS + `pgvector` HNSW Partitioned DDL](./docs/sql/001_postgres_rls_and_partitions.sql)**
 
 ---
@@ -55,20 +55,20 @@ from agentic_memory_sdk import CompositeMemoryService, RemoteCompositeMemoryServ
 +-----------------------------------------+     +-----------------------------------+
 | LAYER 1: FEDERATED DOMAIN PACKS         |     | LAYER 2: APP-LOCAL EXTENSIONS     |
 | (Plug-and-Play Shared Business TBoxes)  |     | (Self-Service / Emergent Schema)  |
-|   - sre_infra@v1.0 (JSON / YAML)        |     |   - Quarantined overflow in       |
-|   - customer_crm@v2.0 (Pydantic)        |     |     `app:{tenant}:{app}`          |
-|   - payments@v2.1 (.ttl OWL/SHACL)      |     |   - Auto-evolution to Domain TBox |
+|   - retail_omnichannel@1.0.0 (.json/.ttl)|    |   - Quarantined overflow in       |
+|   - sre_infra@v1.2 (JSON / YAML)        |     |     `app:{tenant}:{app}`          |
+|   - customer_crm@v2.0 (Pydantic)        |     |   - Auto-evolution to Domain TBox |
 +-----------------------------------------+     +-----------------------------------+
 ```
 
-1. **3-Layer Ontology-Grounded Memory**:
+1. **3-Layer Domain-Agnostic Ontology**:
    - **Layer 0 (Platform Upper Ontology)**: Built-in meta-graph (`p:Actor`, `p:Object`, `p:Event`, `p:Concept`, `p:CandidateConcept`, `p:UserPreference`) requiring zero upfront configuration.
-   - **Layer 1 (Federated Domain Packs)**: Register domain ontologies via **JSON/YAML**, **Python Pydantic models**, or **W3C OWL/SHACL Turtle (`.ttl`)** files using `DomainPackLoader`.
+   - **Layer 1 (Federated Domain Packs)**: Register domain ontologies for **Retail & Supply Chain**, **SRE & Cloud Ops**, **Healthcare**, **FinOps**, or **Customer CRM** via **JSON/YAML**, **Python Pydantic models**, or **W3C OWL/SHACL Turtle (`.ttl`)** files using `DomainPackLoader`.
    - **Layer 2 (Two-Bucket Runtime Governance & Auto-Evolution)**: `TBoxRuntimeValidator` routes validated facts to `domain:{tenant}:{domain}` and quarantines novel/low-confidence extractions in `app:{tenant}:{app}`, with automated promotion via `evolve_app_ontology_from_overflow()`.
 
 2. **3-Tier Context Graph + Procedural Playbooks**:
    - **Tier 1 (Episodic & Seed Store)**: Hybrid Reciprocal Rank Fusion (RRF) search (`pgvector` HNSW + BM25 GIN) with pinned cross-app user preferences (`user:{tenant}:{user_id}`) and `PIIScrubber`.
-   - **Tier 2 (Bi-Temporal Semantic Knowledge Graph)**: Multi-hop reasoning (`max_hops=2`), automatic functional edge invalidation (`t_valid`, `t_invalid`), point-in-time historical queries (`as_of_iso`), and `EntityResolutionGuard` (preventing false merges of numbered/regional siblings like `payment-router-01` vs `payment-router-02`).
+   - **Tier 2 (Bi-Temporal Semantic Knowledge Graph)**: Multi-hop reasoning (`max_hops=2`), automatic functional edge invalidation (`t_valid`, `t_invalid`), point-in-time historical queries (`as_of_iso`), and `EntityResolutionGuard` (preventing false merges of numbered/regional siblings like `FC-Seattle-01` vs `FC-Seattle-02`).
    - **Tier 3 (Procedural Reasoning Traces & Playbooks)**: Records agent tool-call trajectories and caches high-reward reusable workflows (`[MATCHED_PROCEDURAL_PLAYBOOKS]`).
 
 3. **Hot-Path vs. Sleep-Time Batch Extraction (`ExtractionMode`)**:
@@ -82,15 +82,14 @@ from agentic_memory_sdk import CompositeMemoryService, RemoteCompositeMemoryServ
 5. **Multi-Provider LLM & Embedding Adapters**:
    - Google **Gemini**, **Amazon Bedrock** (Converse API + Titan/Cohere Embeddings), **OpenAI / Azure OpenAI / vLLM**, **Ollama**, and local **SentenceTransformers**.
 
-6. **Unified FastAPI + MCP Server in One Pod**:
-   - `adk-memory serve-api` co-hosts both REST (`/v1/...`) and MCP (`/mcp/http`, `/mcp/sse`, `/v1/mcp/tools`, `/v1/mcp/call`) simultaneously.
+6. **100% Data-Plane + Control-Plane Parity Across SDK, FastAPI & MCP (`2026-07-28` / `2025-11-25`)**:
+   - `adk-memory serve-api` co-hosts both REST (`/v1/...`) and the latest **MCP `2026-07-28` Stateless Request/Response Core & `2025-11-25` Streamable HTTP** (`/mcp/http/`, `/mcp/sse`, `/v1/mcp/tools`, `/v1/mcp/call`) with **11 Annotated Tools**, **4 Live Resources**, and **2 Workflow Prompts**.
 
 ---
 
-## Real-World Quickstart
+## The 3 Agent Consumption Patterns
 
-### 1. Single-Stack PostgreSQL, Single-Stack Redis, or Hybrid Stack
-
+### Pattern 1: Direct In-Process Python SDK (`CompositeMemoryService`)
 ```python
 from agentic_composite_memory import (
     AwsIamDatabaseAuthProvider,
@@ -99,7 +98,6 @@ from agentic_composite_memory import (
     CompositeMemoryService,
 )
 
-# 100% PostgreSQL stack with AWS RDS IAM Auth + Amazon Bedrock
 auth = AwsIamDatabaseAuthProvider(
     region="us-east-1",
     service="rds-db",
@@ -114,8 +112,7 @@ service = CompositeMemoryService.from_postgres_stack(
 )
 ```
 
-### 2. Google ADK Agent Pod Integration (`RemoteCompositeMemoryService`)
-
+### Pattern 2: Co-Hosted FastAPI Service + `RemoteCompositeMemoryService`
 ```python
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
@@ -128,21 +125,55 @@ from agentic_composite_memory import (
 remote_memory = RemoteCompositeMemoryService(base_url="http://memory-platform:8095")
 
 agent = LlmAgent(
-    name="sre_commander",
+    name="order_concierge",
     model="gemini-2.5-flash",
-    tools=get_adk_memory_tools(remote_memory, default_app_name="acme:sre_commander"),
+    tools=get_adk_memory_tools(remote_memory, default_app_name="nordstrom_global:order_concierge"),
     after_agent_callback=non_blocking_memory_commit_callback,
 )
 
-runner = Runner(app_name="acme:sre_commander", agent=agent, memory_service=remote_memory)
+runner = Runner(app_name="nordstrom_global:order_concierge", agent=agent, memory_service=remote_memory)
 ```
 
-### 3. Running the Unified FastAPI + MCP Server
-
+### Pattern 3: Model Context Protocol (MCP `2026-07-28` & `2025-11-25` Server)
 ```bash
-# Start unified REST (/v1/*) + MCP (/mcp/http, /mcp/sse, /v1/mcp/*) server on port 8095
+# Start unified FastAPI REST (/v1/*) + MCP (/mcp/http/, /mcp/sse, /v1/mcp/*) server on port 8095
 adk-memory serve-api --host 0.0.0.0 --port 8095 --mode in_memory
+
+# Or run standalone stdio MCP server for Claude Desktop / Cursor / Windsurf
+adk-memory serve-mcp --mode in_memory
 ```
+
+**Claude Desktop / Cursor / Windsurf `mcpServers` Config (`Streamable HTTP` or `stdio`)**:
+```json
+{
+  "mcpServers": {
+    "agentic-composite-memory": {
+      "command": "uvx",
+      "args": ["--from", "agentic-composite-memory", "adk-memory", "serve-mcp", "--mode", "in_memory"]
+    }
+  }
+}
+```
+
+---
+
+## Complete Platform Parity Matrix (SDK vs. FastAPI vs. MCP)
+
+| Platform Capability | In-Process SDK (`CompositeMemoryService` / `Registrar`) | FastAPI REST (`api.py`) & `RemoteCompositeMemoryService` | MCP Server Tool / Resource (`mcp_server.py`) |
+| :--- | :--- | :--- | :--- |
+| **Health & Governance Inspection** | `service.circuit_breaker`, `registry.resolve_context` | `GET /health`, `GET /healthz`, `GET /v1/apps/{tenant}/{app}` | Tool: `inspect_platform_governance`<br>Resource: `memory://governance/health` |
+| **List / Register Domain Pack** | `registrar.register_domain_pack(pack)` | `GET /v1/domains/packs`, `POST /v1/domains/packs`, `POST /v1/domains/packs/review`, `POST /v1/domains/packs/turtle` | Tool: `register_domain_pack`<br>Resource: `memory://domains/packs` |
+| **Onboard / Inspect Agent App** | `registrar.register_adk_app(manifest)` | `POST /v1/apps/register`, `GET /v1/apps/{tenant}/{app}` | Tool: `register_app_manifest`<br>Resource: `memory://apps/{tenant_id}/{app_name}/tbox` |
+| **Ingest Turns (Hot-Path or Sleep-Time)** | `service.add_events_to_memory(..., extraction_mode=...)` | `POST /v1/memory/events` | Tool: `commit_episode` / `ingest_memory` |
+| **3-Tier Hybrid Recall + Point-in-Time** | `service.search_memory(..., as_of_iso=..., max_hops=2)` | `POST /v1/memory/search` | Tool: `recall_context`<br>Prompt: `memory_grounded_assistant` |
+| **Record Tier-3 Reasoning Trace** | `service.record_decision_trace(...)` | `POST /v1/traces` | Tool: `record_decision_trace` |
+| **Register / Reinforce Tier-3 Playbook** | `service.register_playbook(...)` | `POST /v1/playbooks/register` | Tool: `register_playbook` |
+| **Bottom-Up Ontology Auto-Evolution** | `service.evolve_app_ontology_from_overflow(...)` | `POST /v1/ontology/evolve` | Tool: `evolve_app_ontology` |
+| **Sleep-Time Maintenance & Dossiers** | `service.run_memory_maintenance(...)` | `POST /v1/maintenance/run` | Tool: `run_memory_maintenance` |
+| **Ontology Audit Provenance Log** | `registrar.audit_log` | `GET /v1/audit/ontology` | Resource: `memory://audit/ontology` |
+| **GDPR Right-to-be-Forgotten Purge** | `service.purge_user_lineage(...)` | `POST /v1/lineage/purge` | Tool: `purge_user_lineage` (`destructiveHint=true`) |
+
+See **[docs/api_and_mcp_reference.md](./docs/api_and_mcp_reference.md)** for full request/response schemas and `curl` examples.
 
 ---
 
@@ -154,7 +185,7 @@ You can test the full multi-backend platform locally using the included [`docker
 # 1. Start PostgreSQL 16 (pgvector + RLS), Neo4j 5, and Redis 7
 docker compose up -d --wait
 
-# 2. Run the standalone unit & platform test suite (11 tests)
+# 2. Run the standalone unit & platform test suite (13 tests)
 uv run --extra dev pytest tests/test_composite_memory_platform.py -v
 
 # 3. Run the live Docker + Multi-Agent Google ADK A2A E2E suite

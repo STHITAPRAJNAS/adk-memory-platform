@@ -5,6 +5,21 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-11-14
+
+### Added
+- **100% Data-Plane + Control-Plane Parity Across SDK, FastAPI, `RemoteCompositeMemoryService` & MCP**:
+  - Expanded MCP Server (`create_mcp_server`, `MemoryMcpServerTools`, `/v1/mcp/call`) to **11 tools** (`recall_context`, `commit_episode`, `ingest_memory`, `record_decision_trace`, `register_playbook`, `register_domain_pack`, `register_app_manifest`, `evolve_app_ontology`, `run_memory_maintenance`, `inspect_platform_governance`, `purge_user_lineage`).
+  - Added FastAPI routes (`GET /healthz`, `GET /v1/domains/packs`, `GET /v1/apps/{tenant_id}/{app_name}`, `POST /v1/playbooks/register`, `POST /v1/ontology/evolve`) and `extraction_mode` / `defer_extraction` support on `POST /v1/memory/events`.
+  - Expanded `RemoteCompositeMemoryService` with `register_domain_pack`, `inspect_app_governance`, `register_playbook`, `evolve_app_ontology`, and `run_memory_maintenance`.
+- **Latest Model Context Protocol (`2026-07-28` & `2025-11-25`) Compliance**:
+  - Full support for MCP `2026-07-28` Stateless Request/Response Core over Streamable HTTP (`/mcp/http/`) with `Mcp-Method` & `Mcp-Name` header routing and `structuredContent` / `outputSchema`.
+  - Added explicit `ToolAnnotations` (`title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) across all 11 MCP tools.
+  - Added 4 MCP Resources (`memory://governance/health`, `memory://domains/packs`, `memory://audit/ontology`, and dynamic template `memory://apps/{tenant_id}/{app_name}/tbox`) and 2 MCP Prompts (`memory_grounded_assistant`, `ontology_steward_domain_designer`).
+  - Wired `StreamableHTTPSessionManager` lifespan and auto-initializing ASGI wrapper for zero-friction Streamable HTTP mounting inside FastAPI.
+- **Omnichannel Retail Domain Suite & 3 Consumption Patterns**:
+  - Added `examples/domain_packs/retail_omnichannel.json`, `examples/domain_packs/retail_omnichannel_tbox.ttl`, `examples/retail_omnichannel_suite.py`, `examples/three_consumption_patterns_demo.py`, and comprehensive documentation in `docs/`.
+
 ## [0.1.2] - 2026-11-14
 
 ### Fixed & Optimized

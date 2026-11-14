@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ..governance import PlatformOntologyRegistrar
@@ -16,8 +17,9 @@ from ..service import CompositeMemoryService, Event, types
 class MemoryMcpServerTools:
     """
     Exposes the complete Data Plane + Control Plane of the Composite Memory Platform
-    as MCP-compatible tools that can be mounted into a FastMCP/MCPServer instance,
-    invoked via `/v1/mcp/call`, or passed to Google ADK's `McpToolset`.
+    as MCP-compatible tools, resources, and prompts that can be mounted into a
+    `MCPServer` (mcp 2.x) / `FastMCP` (mcp 1.x) instance, served over Streamable HTTP
+    (`2026-07-28` / `2025-11-25`), invoked via `/v1/mcp/call`, or passed to Google ADK's `McpToolset`.
     """
 
     TOOL_NAMES: list[str] = [
@@ -32,6 +34,18 @@ class MemoryMcpServerTools:
         "run_memory_maintenance",
         "inspect_platform_governance",
         "purge_user_lineage",
+    ]
+
+    RESOURCE_URIS: list[str] = [
+        "memory://governance/health",
+        "memory://domains/packs",
+        "memory://audit/ontology",
+        "memory://apps/{tenant_id}/{app_name}/tbox",
+    ]
+
+    PROMPT_NAMES: list[str] = [
+        "memory_grounded_assistant",
+        "ontology_steward_domain_designer",
     ]
 
     def __init__(
@@ -304,86 +318,338 @@ def create_mcp_server(
     name: str = "adk-composite-memory",
 ) -> Any:
     """
-    Creates a Model Context Protocol (MCP) Server using `MCPServer` (mcp 2.x)
-    or `FastMCP` (mcp 1.x), exposing the full 11-tool Data Plane + Control Plane over
-    stdio, SSE, or Streamable HTTP.
+    Creates a Model Context Protocol (MCP) Server following the latest MCP specification
+    (`2026-07-28` / `2025-11-25`) via `MCPServer` (mcp 2.x) or `FastMCP` (mcp 1.x), exposing:
+      - 11 annotated tools with `ToolAnnotations` (`readOnlyHint`, `destructiveHint`,
+        `idempotentHint`, `openWorldHint`) and `structuredContent` / `outputSchema`
+      - 4 MCP Resources (`memory://governance/health`, `memory://domains/packs`,
+        `memory://audit/ontology`, and template `memory://apps/{tenant_id}/{app_name}/tbox`)
+      - 2 MCP Prompts (`memory_grounded_assistant`, `ontology_steward_domain_designer`)
     """
     try:
         from mcp.server.mcpserver import MCPServer as _MCPServerClass
     except ImportError:
         from mcp.server.fastmcp import FastMCP as _MCPServerClass
 
-    mcp = _MCPServerClass(name)
+    try:
+        from mcp.types import ToolAnnotations
+    except ImportError:  # pragma: no cover
+        ToolAnnotations = None  # type: ignore[assignment]
+
+    def _ann(
+        title: str,
+        *,
+        read_only: bool = False,
+        destructive: bool = False,
+        idempotent: bool = False,
+        open_world: bool = False,
+    ) -> Any:
+        if ToolAnnotations is None:
+            return None
+        return ToolAnnotations(
+            title=title,
+            read_only_hint=read_only,
+            destructive_hint=destructive,
+            idempotent_hint=idempotent,
+            open_world_hint=open_world,
+        )
+
+    try:
+        mcp = _MCPServerClass(
+            name,
+            title="Agentic Composite Memory Platform MCP Server",
+            version="0.1.3",
+            instructions=(
+                "Enterprise multi-tenant 3-Tier Composite Memory & Stratified Ontology MCP Server. "
+                "Use `recall_context` before answering user queries, `commit_episode` to store turns, "
+                "`register_playbook` to codify reusable SOPs, and `memory://...` resources to inspect schemas."
+            ),
+            website_url="https://github.com/STHITAPRAJNAS/adk-memory-platform",
+        )
+    except TypeError:  # Fallback for older FastMCP 1.x signatures
+        mcp = _MCPServerClass(name)
+
     tools = MemoryMcpServerTools(service=service, registrar=registrar)
 
+    # -------------------------------------------------------------------------
+    # 1. MCP TOOLS (11 Annotated Data-Plane + Control-Plane Tools)
+    # -------------------------------------------------------------------------
     mcp.tool(
         name="recall_context",
+        title="3-Tier Hybrid Memory Recall",
         description=(
             "3-Tier hybrid recall: Procedural Playbooks + RRF seed search + multi-hop bi-temporal "
             "ontology graph traversal + episodic memory with point-in-time (`as_of_timestamp`) support."
         ),
+        annotations=_ann(
+            "3-Tier Hybrid Memory Recall",
+            read_only=True,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.recall_context)
 
     mcp.tool(
         name="commit_episode",
+        title="Commit Interaction Episode",
         description=(
             "Ingest an agent/user interaction into Episodic Memory and extract TBox-validated "
             "entities and bi-temporal facts (supports `extraction_mode='hot_path'|'sleep_time'`)."
         ),
+        annotations=_ann(
+            "Commit Interaction Episode",
+            read_only=False,
+            destructive=False,
+            idempotent=False,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.commit_episode)
 
     mcp.tool(
         name="ingest_memory",
+        title="Ingest Memory Turn",
         description="Alias for `commit_episode` using `text` parameter.",
+        annotations=_ann(
+            "Ingest Memory Turn",
+            read_only=False,
+            destructive=False,
+            idempotent=False,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.ingest_memory)
 
     mcp.tool(
         name="record_decision_trace",
+        title="Record Procedural Reasoning Trace",
         description=(
             "Record Tier 3 Procedural Reasoning Traces (`AgentRun -> ToolCall -> Entity`) "
             "for explainability and auditability."
         ),
+        annotations=_ann(
+            "Record Procedural Reasoning Trace",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.record_decision_trace)
 
     mcp.tool(
         name="register_playbook",
+        title="Register or Reinforce Procedural Playbook",
         description="Register or reinforce a reusable Tier-3 Procedural Playbook (`trigger_intent -> workflow_steps`).",
+        annotations=_ann(
+            "Register or Reinforce Procedural Playbook",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.register_playbook)
 
     mcp.tool(
         name="register_domain_pack",
+        title="Register Layer-1 Federated Domain Pack",
         description="Register a Layer-1 Federated Domain Pack (`classes` & `relations`) in the platform catalog.",
+        annotations=_ann(
+            "Register Layer-1 Federated Domain Pack",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.register_domain_pack)
 
     mcp.tool(
         name="register_app_manifest",
+        title="Register Agent App Governance Manifest",
         description=(
             "Register an agent app's Governance Tier (`APP_PRIVATE`, `DOMAIN_SHARED`, `GLOBAL_CORE`) "
             "and subscribed Domain Packs."
         ),
+        annotations=_ann(
+            "Register Agent App Governance Manifest",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.register_app_manifest)
 
     mcp.tool(
         name="evolve_app_ontology",
+        title="Evolve App Ontology from Overflow",
         description="Promote high-confidence quarantined overflow classes & predicates into the governed TBox.",
+        annotations=_ann(
+            "Evolve App Ontology from Overflow",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.evolve_app_ontology)
 
     mcp.tool(
         name="run_memory_maintenance",
+        title="Run Sleep-Time Memory Maintenance",
         description="Run sleep-time batch extraction, session compaction, overflow pruning, and entity dossier synthesis.",
+        annotations=_ann(
+            "Run Sleep-Time Memory Maintenance",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.run_memory_maintenance)
 
     mcp.tool(
         name="inspect_platform_governance",
+        title="Inspect Platform & App Governance",
         description="Inspect registered Domain Packs, circuit-breaker health, audit log count, and optional app TBox.",
+        annotations=_ann(
+            "Inspect Platform & App Governance",
+            read_only=True,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.inspect_platform_governance)
 
     mcp.tool(
         name="purge_user_lineage",
+        title="GDPR Right-to-be-Forgotten Lineage Purge",
         description=(
             "Execute a cascading GDPR Right-to-be-Forgotten lineage deletion across "
             "Episodic and Bi-Temporal Graph stores."
         ),
+        annotations=_ann(
+            "GDPR Right-to-be-Forgotten Lineage Purge",
+            read_only=False,
+            destructive=True,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
     )(tools.purge_user_lineage)
+
+    # -------------------------------------------------------------------------
+    # 2. MCP RESOURCES (`resources/list`, `resources/templates/list`, `resources/read`)
+    # -------------------------------------------------------------------------
+    if hasattr(mcp, "resource"):
+
+        @mcp.resource(
+            "memory://governance/health",
+            name="platform_governance_health",
+            title="Platform Governance & Circuit Breaker Health",
+            description="Live health status, circuit-breaker state, and registered Domain Pack IDs.",
+            mime_type="application/json",
+        )
+        async def resource_governance_health() -> str:
+            data = await tools.inspect_platform_governance()
+            return json.dumps(data, indent=2)
+
+        @mcp.resource(
+            "memory://domains/packs",
+            name="domain_packs_catalog",
+            title="Layer-1 Federated Domain Packs Catalog",
+            description="Complete catalog of all registered Layer-1 Federated Domain Packs (classes and relations).",
+            mime_type="application/json",
+        )
+        def resource_domain_packs() -> str:
+            packs = {
+                p.pack_id: p.model_dump() for p in tools.registrar._domain_packs.values()
+            }
+            return json.dumps({"count": len(packs), "packs": packs}, indent=2)
+
+        @mcp.resource(
+            "memory://audit/ontology",
+            name="ontology_audit_log",
+            title="Immutable Ontology Provenance Audit Log",
+            description="Immutable audit trail of all top-down steward reviews and bottom-up overflow promotions.",
+            mime_type="application/json",
+        )
+        def resource_ontology_audit_log() -> str:
+            entries = [e.model_dump() for e in tools.registrar.audit_log]
+            return json.dumps({"audit_count": len(entries), "entries": entries}, indent=2)
+
+        @mcp.resource(
+            "memory://apps/{tenant_id}/{app_name}/tbox",
+            name="app_compiled_tbox",
+            title="App Compiled TBox & Namespaces",
+            description="Inspects a specific tenant/app's compiled ontology TBox and active read/write namespaces.",
+            mime_type="application/json",
+        )
+        async def resource_app_tbox(tenant_id: str, app_name: str) -> str:
+            data = await tools.inspect_platform_governance(
+                app_name=f"{tenant_id}:{app_name}"
+            )
+            return json.dumps(data.get("app_governance", data), indent=2)
+
+    # -------------------------------------------------------------------------
+    # 3. MCP PROMPTS (`prompts/list`, `prompts/get`)
+    # -------------------------------------------------------------------------
+    if hasattr(mcp, "prompt"):
+
+        @mcp.prompt(
+            name="memory_grounded_assistant",
+            title="3-Tier Memory-Grounded Assistant Prompt",
+            description=(
+                "Executes 3-Tier hybrid recall (`recall_context`) and builds a grounded system/user "
+                "prompt hydrated with matched Procedural Playbooks, Bi-Temporal Knowledge Graph facts, "
+                "and Episodic conversation history."
+            ),
+        )
+        async def prompt_memory_grounded_assistant(
+            app_name: str,
+            user_id: str,
+            query: str,
+        ) -> str:
+            recalled = await tools.recall_context(
+                app_name=app_name, user_id=user_id, query=query
+            )
+            blocks = "\n\n".join(
+                m["text"] for m in recalled.get("memories", []) if m.get("text")
+            )
+            return (
+                "You are an enterprise agent grounded in the Agentic Composite Memory Platform.\n"
+                "Follow any `[MATCHED_PROCEDURAL_PLAYBOOKS]` SOPs strictly and prioritize current "
+                "`[COMPOSITE_MEMORY_CONTEXT]` graph assertions over older episodes.\n\n"
+                f"=== RECALLED MEMORY CONTEXT ({app_name} / {user_id}) ===\n"
+                f"{blocks or '(No prior memories found.)'}\n\n"
+                f"=== CURRENT USER REQUEST ===\n{query}"
+            )
+
+        @mcp.prompt(
+            name="ontology_steward_domain_designer",
+            title="Ontology Steward Domain Pack Designer Prompt",
+            description=(
+                "Guides an LLM Ontology Steward to synthesize a W3C/Layer-1 `DomainPackSpec` "
+                "(classes anchored under Layer 0 Upper Ontology and typed relations) from domain transcripts."
+            ),
+        )
+        def prompt_ontology_steward_domain_designer(
+            domain_name: str,
+            sample_transcript: str,
+        ) -> str:
+            return (
+                f"Design a Layer-1 Federated Domain Pack for domain `{domain_name}`.\n"
+                "1. Anchor every class under a Layer-0 Upper Ontology parent "
+                "(`Agent`, `PhysicalObject`, `ConceptualEntity`, `Event`, `TemporalEntity`, `Location`).\n"
+                "2. Normalize all predicates to `UPPER_SNAKE_CASE` and specify `domain`, `range`, "
+                "`is_functional`, and `is_transitive`.\n"
+                "3. Call the `register_domain_pack` MCP tool with `review_with_steward=True`.\n\n"
+                f"=== SAMPLE DOMAIN TRANSCRIPT ===\n{sample_transcript}"
+            )
 
     return mcp

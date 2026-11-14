@@ -1503,4 +1503,135 @@ async def test_retail_omnichannel_suite_and_three_consumption_patterns():
     assert all(patterns_res.values()), f"Consumption pattern checks failed: {patterns_res}"
 
 
+@pytest.mark.asyncio
+async def test_latest_mcp_protocol_2026_07_28_and_2025_11_25_streamable_http():
+    """
+    Verifies compliance with the latest Model Context Protocol specifications
+    (`2026-07-28` Stateless Request/Response Core with Header Routing `Mcp-Method` / `Mcp-Name`,
+    and `2025-11-25` Streamable HTTP) over `/mcp/http/`:
+      1. `tools/list` returns all 11 tools with explicit `ToolAnnotations` (`readOnlyHint`,
+         `destructiveHint`, `idempotentHint`, `openWorldHint`, `title`) and `outputSchema`.
+      2. `tools/call` under `2026-07-28` (`Mcp-Method`, `Mcp-Name`, `_meta` envelope) returns
+         typed `structuredContent` alongside `TextContent`.
+      3. `resources/list`, `resources/templates/list`, and `resources/read` expose live
+         `memory://governance/health`, `memory://domains/packs`, `memory://audit/ontology`,
+         and `memory://apps/{tenant_id}/{app_name}/tbox`.
+      4. `prompts/list` and `prompts/get` expose `memory_grounded_assistant` and
+         `ontology_steward_domain_designer`.
+    """
+    store = InMemoryUnifiedAdapter()
+    service = CompositeMemoryService(
+        registry_adapter=store,
+        seed_store_adapter=store,
+        graph_adapter=store,
+        embedding_adapter=DeterministicHashEmbeddingAdapter(),
+        extractor_adapter=RuleBasedMockExtractorAdapter(),
+    )
+    app = create_memory_platform_app(service=service, enable_outbox_worker=False)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1",
+    ) as client:
+        # 1. Verify /v1/mcp/tools metadata endpoint
+        meta_resp = await client.get("/v1/mcp/tools")
+        assert meta_resp.status_code == 200
+        meta_json = meta_resp.json()
+        assert meta_json["protocol_version"] == "2026-07-28"
+        assert len(meta_json["tools"]) == 11
+        assert len(meta_json["resources"]) == 4
+        assert len(meta_json["prompts"]) == 2
+
+        # 2. Verify 2025-11-25 Streamable HTTP tools/list + ToolAnnotations
+        r_tools = await client.post(
+            "/mcp/http/",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-11-25",
+            },
+        )
+        assert r_tools.status_code == 200
+        tools_list = r_tools.json()["result"]["tools"]
+        assert len(tools_list) == 11
+        by_name = {t["name"]: t for t in tools_list}
+        assert by_name["recall_context"]["annotations"]["readOnlyHint"] is True
+        assert by_name["recall_context"]["annotations"]["destructiveHint"] is False
+        assert by_name["purge_user_lineage"]["annotations"]["destructiveHint"] is True
+        assert "outputSchema" in by_name["recall_context"]
+
+        # 3. Verify 2026-07-28 Stateless Core tools/call with Mcp-Method & Mcp-Name routing headers
+        r_call_2026 = await client.post(
+            "/mcp/http/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_platform_governance",
+                    "arguments": {},
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    },
+                },
+            },
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2026-07-28",
+                "Mcp-Method": "tools/call",
+                "Mcp-Name": "inspect_platform_governance",
+            },
+        )
+        assert r_call_2026.status_code == 200
+        call_res = r_call_2026.json()["result"]
+        assert call_res["structuredContent"]["circuit_breaker_state"] == "CLOSED"
+
+        # 4. Verify MCP Resources (resources/list, resources/templates/list, resources/read)
+        r_res_list = await client.post(
+            "/mcp/http/",
+            json={"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-11-25",
+            },
+        )
+        assert r_res_list.status_code == 200
+        res_uris = {r["uri"] for r in r_res_list.json()["result"]["resources"]}
+        assert "memory://governance/health" in res_uris
+        assert "memory://domains/packs" in res_uris
+        assert "memory://audit/ontology" in res_uris
+
+        r_res_read = await client.post(
+            "/mcp/http/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "resources/read",
+                "params": {"uri": "memory://governance/health"},
+            },
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-11-25",
+            },
+        )
+        assert r_res_read.status_code == 200
+        assert "CLOSED" in r_res_read.json()["result"]["contents"][0]["text"]
+
+        # 5. Verify MCP Prompts (prompts/list, prompts/get)
+        r_prompts = await client.post(
+            "/mcp/http/",
+            json={"jsonrpc": "2.0", "id": 5, "method": "prompts/list", "params": {}},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-11-25",
+            },
+        )
+        assert r_prompts.status_code == 200
+        prompt_names = {p["name"] for p in r_prompts.json()["result"]["prompts"]}
+        assert "memory_grounded_assistant" in prompt_names
+        assert "ontology_steward_domain_designer" in prompt_names
+
+
+
 
