@@ -4,34 +4,54 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentic-composite-memory"
-version = "0.1.0"
+version = "0.1.1"
 description = "Enterprise Multi-Tenant Ontology-Grounded Composite Memory SDK, MCP Server & Platform Service for Google ADK Agents"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Sthitaprajna Sahoo", email = "papu.sahoo@gmail.com" }]
+maintainers = [{ name = "Sthitaprajna Sahoo", email = "papu.sahoo@gmail.com" }]
 requires-python = ">=3.11"
 keywords = [
     "google-adk",
     "a2a",
     "mcp",
     "agent-memory",
+    "composite-memory",
     "knowledge-graph",
     "bitemporal",
     "ontology",
     "pgvector",
     "neo4j",
     "neptune",
+    "redis",
     "opensearch",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Database",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage      = "https://github.com/sthitaprajnas/adk-memory-platform"
+Repository    = "https://github.com/sthitaprajnas/adk-memory-platform"
+Documentation = "https://github.com/sthitaprajnas/adk-memory-platform#readme"
+Changelog     = "https://github.com/sthitaprajnas/adk-memory-platform/blob/main/CHANGELOG.md"
+Issues        = "https://github.com/sthitaprajnas/adk-memory-platform/issues"
 dependencies = [
     "pydantic>=2.7.0",
     "fastapi>=0.111.0",
@@ -106,7 +126,9 @@ include = [
     "src/agentic_memory_sdk/**",
     "src/agentic_composite_memory/**",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
+    "NOTICE",
     "pyproject.toml",
 ]
 
