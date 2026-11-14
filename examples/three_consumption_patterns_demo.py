@@ -173,6 +173,27 @@ async def run_three_consumption_patterns_demo() -> dict[str, Any]:
         # 3C. Co-Hosted Stateless MCP REST Bridge (`GET /v1/mcp/tools` & `POST /v1/mcp/call`)
         tools_list_resp = await http_client.get("/v1/mcp/tools")
         assert tools_list_resp.status_code == 200
+        mcp_tool_names = tools_list_resp.json()["tools"]
+        for expected_tool in (
+            "recall_context",
+            "commit_episode",
+            "register_playbook",
+            "register_domain_pack",
+            "evolve_app_ontology",
+            "run_memory_maintenance",
+            "inspect_platform_governance",
+        ):
+            assert expected_tool in mcp_tool_names
+
+        gov_inspect = await http_client.post(
+            "/v1/mcp/call",
+            json={
+                "tool_name": "inspect_platform_governance",
+                "arguments": {"app_name": "rei_coop:gear_specialist_agent"},
+            },
+        )
+        assert gov_inspect.status_code == 200
+        assert "RetailOrder" in gov_inspect.json()["result"]["app_governance"]["classes"]
 
         mcp_http_call = await http_client.post(
             "/v1/mcp/call",

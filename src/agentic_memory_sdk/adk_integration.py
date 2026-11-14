@@ -6,7 +6,7 @@ from typing import Any, Sequence
 
 import httpx
 
-from .models import AppMemoryManifest, ReasoningTraceStep
+from .models import AppMemoryManifest, DomainPackSpec, ExtractionMode, ReasoningTraceStep
 from .service import BaseMemoryService, Event, MemoryEntry, SearchMemoryResponse, Session, types
 
 logger = logging.getLogger(__name__)
@@ -54,9 +54,17 @@ class RemoteCompositeMemoryService(BaseMemoryService):
             resp.raise_for_status()
             return resp.json()
 
+    async def register_domain_pack(self, pack: DomainPackSpec) -> dict[str, Any]:
+        """Registers a Layer 1 Federated Domain Pack with the remote Memory Platform Service."""
+        return await self._request("POST", "/v1/domains/packs", pack.model_dump(mode="json"))
+
     async def register_manifest(self, manifest: AppMemoryManifest) -> dict[str, Any]:
         """Registers an ADK app's ontology manifest with the remote Memory Platform Service."""
         return await self._request("POST", "/v1/apps/register", manifest.model_dump(mode="json"))
+
+    async def inspect_app_governance(self, tenant_id: str, app_name: str) -> dict[str, Any]:
+        """Inspects an ADK app's active TBox and read/write namespaces from the remote Memory Platform."""
+        return await self._request("GET", f"/v1/apps/{tenant_id}/{app_name}")
 
     async def add_session_to_memory(self, session: Session) -> None:
         await self.add_events_to_memory(
@@ -74,6 +82,8 @@ class RemoteCompositeMemoryService(BaseMemoryService):
         events: Sequence[Event],
         session_id: str | None = None,
         custom_metadata: dict[str, Any] | None = None,
+        defer_extraction: bool | None = None,
+        extraction_mode: ExtractionMode | str | None = None,
     ) -> None:
         serialized_events = []
         for ev in events:
@@ -90,6 +100,11 @@ class RemoteCompositeMemoryService(BaseMemoryService):
         if not serialized_events:
             return
 
+        mode_str = (
+            extraction_mode.value
+            if isinstance(extraction_mode, ExtractionMode)
+            else extraction_mode
+        )
         await self._request(
             "POST",
             "/v1/memory/events",
@@ -99,6 +114,8 @@ class RemoteCompositeMemoryService(BaseMemoryService):
                 "session_id": session_id or "default_session",
                 "events": serialized_events,
                 "custom_metadata": custom_metadata or {},
+                "defer_extraction": defer_extraction,
+                "extraction_mode": mode_str,
             },
         )
 
@@ -198,6 +215,33 @@ class RemoteCompositeMemoryService(BaseMemoryService):
                 "resolution_summary": resolution_summary,
                 "share_in_domain": share_in_domain,
             },
+        )
+
+    async def purge_user_lineage(self, app_name: str, user_id: str) -> dict[str, Any]:
+        return await self._request(
+            "POST", "/v1/lineage/purge", {"app_name": app_name, "user_id": user_id}
+        )
+
+    async def evolve_app_ontology(
+        self, app_name: str, min_confidence_to_promote: float = 0.75
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/ontology/evolve",
+            {
+                "app_name": app_name,
+                "min_confidence_to_promote": min_confidence_to_promote,
+            },
+        )
+
+    async def run_memory_maintenance(
+        self,
+        min_episodes_to_compact: int = 4,
+        min_overflow_confidence: float = 0.55,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            f"/v1/maintenance/run?min_episodes_to_compact={min_episodes_to_compact}&min_overflow_confidence={min_overflow_confidence}",
         )
 
 

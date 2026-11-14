@@ -38,6 +38,8 @@ class IngestEventsRequest(BaseModel):
     session_id: str = "default_session"
     events: list[EventTurnPayload]
     custom_metadata: dict[str, Any] = Field(default_factory=dict)
+    extraction_mode: str | None = None
+    defer_extraction: bool | None = None
 
 
 class SearchMemoryRequest(BaseModel):
@@ -112,6 +114,7 @@ def create_memory_platform_app(
     ont_registrar = registrar or PlatformOntologyRegistrar(service.registry)
 
     @app.get("/health")
+    @app.get("/healthz")
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
@@ -124,7 +127,16 @@ def create_memory_platform_app(
     # ------------------------------------------------------------------------
     # CONTROL PLANE: Domain Pack Catalog & ADK App Registration
     # ------------------------------------------------------------------------
+    @app.get("/v1/domains/packs")
+    async def list_domain_packs() -> dict[str, Any]:
+        """Lists all registered Layer 1 Federated Domain Packs in the catalog."""
+        unique_packs = {
+            p.pack_id: p.model_dump() for p in ont_registrar._domain_packs.values()
+        }
+        return {"count": len(unique_packs), "packs": unique_packs}
+
     @app.post("/v1/domains/packs")
+    @app.post("/v1/domains/register")
     async def register_domain_pack(pack: DomainPackSpec) -> dict[str, Any]:
         """Registers a plug-and-play Layer 1 Federated Domain Pack (JSON/Pydantic)."""
         ont_registrar.register_domain_pack(pack)
@@ -207,6 +219,18 @@ def create_memory_platform_app(
             "compiled_predicates": list(compiled_tbox.relations.keys()),
         }
 
+    @app.get("/v1/apps/{tenant_id}/{app_name}")
+    async def inspect_app_governance(tenant_id: str, app_name: str) -> dict[str, Any]:
+        """Inspects an ADK app's compiled TBox, governance tier, and active read/write namespaces."""
+        ctx = await service.registry.resolve_context(tenant_id, app_name, "inspector")
+        return {
+            "tenant_id": ctx.tenant_id,
+            "app_name": ctx.app_name,
+            "read_namespaces": ctx.read_namespaces,
+            "write_namespace": ctx.write_namespace,
+            "tbox": ctx.tbox.model_dump(),
+        }
+
     # ------------------------------------------------------------------------
     # DATA PLANE: Write, Read, Trace, Outbox & Lineage Purge
     # ------------------------------------------------------------------------
@@ -229,6 +253,8 @@ def create_memory_platform_app(
                 events=adk_events,
                 session_id=req.session_id,
                 custom_metadata=req.custom_metadata,
+                defer_extraction=req.defer_extraction,
+                extraction_mode=req.extraction_mode,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -342,13 +368,7 @@ def create_memory_platform_app(
                     "streamable_http": "/mcp/http",
                     "stateless_rpc": "/v1/mcp/call",
                 },
-                "tools": [
-                    "recall_context",
-                    "commit_episode",
-                    "record_decision_trace",
-                    "register_app_manifest",
-                    "purge_user_lineage",
-                ],
+                "tools": MemoryMcpServerTools.TOOL_NAMES,
             }
 
         @app.post("/v1/mcp/call")
