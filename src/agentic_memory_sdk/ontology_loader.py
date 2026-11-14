@@ -83,6 +83,17 @@ class DomainPackLoader:
         )
 
     @staticmethod
+    def from_turtle_file(pack_id: str, path: str | Path) -> DomainPackSpec:
+        """Loads and compiles an OWL/RDFS Turtle (`.ttl`) file on disk into a `DomainPackSpec`."""
+        turtle_content = Path(path).read_text(encoding="utf-8")
+        return DomainPackLoader.from_turtle(pack_id, turtle_content)
+
+    @staticmethod
+    def from_turtle_str(pack_id: str, turtle_content: str) -> DomainPackSpec:
+        """Alias for `from_turtle`."""
+        return DomainPackLoader.from_turtle(pack_id, turtle_content)
+
+    @staticmethod
     def from_turtle(
         pack_id: str,
         turtle_content: str,
