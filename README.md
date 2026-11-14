@@ -11,6 +11,7 @@ An enterprise-grade, **domain-agnostic**, multi-tenant **Composite Memory SDK, F
 ## Documentation Hub (`docs/`)
 
 - **[Documentation Index](./docs/README.md)**
+- **[Enterprise Best Practices & Production Go-Live Guide](./docs/best_practices_guide.md)**
 - **[Architecture, 3-Layer Ontology & 3-Tier Context Graph Guide](./docs/architecture_and_ontology_guide.md)**
 - **[Real-World Usage, Retail/SRE Domain Suites & The 3 Agent Consumption Patterns (SDK, FastAPI, MCP)](./docs/real_world_usage_and_recipes.md)**
 - **[FastAPI REST, MCP Protocol (`2026-07-28` / `2025-11-25`) & CLI Reference](./docs/api_and_mcp_reference.md)**
