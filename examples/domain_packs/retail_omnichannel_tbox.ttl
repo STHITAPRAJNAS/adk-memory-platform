@@ -1,0 +1,47 @@
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix p:    <https://platform.example.org/upper#> .
+@prefix ret:  <https://platform.example.org/domains/retail_omnichannel#> .
+
+ret:Ontology a owl:Ontology ;
+    rdfs:label "Omnichannel Retail & Supply Chain Ontology" ;
+    owl:versionInfo "1.0.0" .
+
+# --- Classes anchored to Layer 0 Platform Upper Ontology ---
+ret:RetailCustomer a owl:Class ;
+    rdfs:subClassOf p:Actor .
+
+ret:ProductSKU a owl:Class ;
+    rdfs:subClassOf p:Object .
+
+ret:FulfillmentWarehouse a owl:Class ;
+    rdfs:subClassOf p:Object .
+
+ret:RetailOrder a owl:Class ;
+    rdfs:subClassOf p:Event .
+
+ret:ReturnRequest a owl:Class ;
+    rdfs:subClassOf p:Event .
+
+ret:LoyaltyTier a owl:Class ;
+    rdfs:subClassOf p:Concept .
+
+# --- Object Properties (Relations) ---
+ret:ENROLLED_IN_TIER a owl:ObjectProperty, owl:FunctionalProperty ;
+    rdfs:domain ret:RetailCustomer ;
+    rdfs:range ret:LoyaltyTier ;
+    rdfs:comment "Active loyalty tier for a customer (functional: new tier closes prior tier)." .
+
+ret:SHIPPED_FROM_PRIMARY a owl:ObjectProperty, owl:FunctionalProperty ;
+    rdfs:domain ret:RetailOrder ;
+    rdfs:range ret:FulfillmentWarehouse ;
+    rdfs:comment "Active fulfillment warehouse assigned to ship an order." .
+
+ret:CONTAINS_SKU a owl:ObjectProperty ;
+    rdfs:domain ret:RetailOrder ;
+    rdfs:range ret:ProductSKU .
+
+ret:STOCKED_AT a owl:ObjectProperty ;
+    rdfs:domain ret:ProductSKU ;
+    rdfs:range ret:FulfillmentWarehouse .

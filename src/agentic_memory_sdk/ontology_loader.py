@@ -35,10 +35,14 @@ class DomainPackLoader:
                     relations[pred] = RelationRule.model_validate({**r, "predicate": pred})
 
         disjoint = [tuple(pair) for pair in data.get("disjoint_classes", [])]
+        version = data.get("version", "1.0.0")
+        raw_domain = data.get("domain_name") or data.get("domain_id") or "custom_domain"
+        pack_id = data.get("pack_id") or f"{raw_domain}@{version}"
+        domain_name = data.get("domain_name") or pack_id.split("@")[0]
         return DomainPackSpec(
-            pack_id=data["pack_id"],
-            domain_name=data.get("domain_name") or data["pack_id"].split("@")[0],
-            version=data.get("version", "1.0.0"),
+            pack_id=pack_id,
+            domain_name=domain_name,
+            version=version,
             classes=data.get("classes", {}),
             disjoint_classes=disjoint,
             relations=relations,

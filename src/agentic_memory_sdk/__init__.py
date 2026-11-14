@@ -83,9 +83,11 @@ from .ports import (
     RegistryStoreAdapter,
 )
 from .server import MemoryMcpServerTools, create_mcp_server, create_memory_platform_app
-from .service import CompositeMemoryService
+from .service import CompositeMemoryService, Event, types
 
 __all__ = [
+    "Event",
+    "types",
     "UpperConceptType",
     "GovernanceTier",
     "RelationRule",

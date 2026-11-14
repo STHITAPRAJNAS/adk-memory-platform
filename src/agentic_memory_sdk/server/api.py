@@ -61,6 +61,20 @@ class PurgeLineageRequest(BaseModel):
     user_id: str
 
 
+class RegisterPlaybookRequest(BaseModel):
+    app_name: str
+    user_id: str
+    trigger_intent: str
+    workflow_steps: list[str]
+    resolution_summary: str
+    share_in_domain: bool = True
+
+
+class EvolveOntologyRequest(BaseModel):
+    app_name: str
+    min_confidence_to_promote: float = 0.75
+
+
 def create_memory_platform_app(
     service: CompositeMemoryService,
     registrar: PlatformOntologyRegistrar | None = None,
@@ -180,6 +194,7 @@ def create_memory_platform_app(
         }
 
     @app.post("/v1/apps/register")
+    @app.post("/v1/apps/onboard")
     async def register_adk_app(manifest: AppMemoryManifest) -> dict[str, Any]:
         """Registers an ADK agent app's Governance Tier, Domain Pack subscriptions, and custom types."""
         compiled_tbox = await ont_registrar.register_adk_app(manifest)
@@ -245,6 +260,7 @@ def create_memory_platform_app(
         return {"memories": serialized}
 
     @app.post("/v1/traces")
+    @app.post("/v1/traces/record")
     async def record_trace(req: RecordTraceRequest) -> dict[str, Any]:
         await service.record_decision_trace(
             app_name=req.app_name,
@@ -254,6 +270,32 @@ def create_memory_platform_app(
             steps=req.steps,
         )
         return {"status": "recorded", "run_id": req.run_id, "steps": len(req.steps)}
+
+    @app.post("/v1/playbooks/register")
+    async def register_playbook(req: RegisterPlaybookRequest) -> dict[str, Any]:
+        pb = await service.register_playbook(
+            app_name=req.app_name,
+            user_id=req.user_id,
+            trigger_intent=req.trigger_intent,
+            workflow_steps=req.workflow_steps,
+            resolution_summary=req.resolution_summary,
+            share_in_domain=req.share_in_domain,
+        )
+        return {
+            "status": "registered",
+            "playbook_id": pb.playbook_id,
+            "success_count": pb.success_count,
+            "namespace": pb.namespace,
+        }
+
+    @app.post("/v1/ontology/evolve")
+    async def evolve_ontology(req: EvolveOntologyRequest) -> dict[str, Any]:
+        audit = await service.evolve_app_ontology_from_overflow(
+            req.app_name,
+            min_confidence_to_promote=req.min_confidence_to_promote,
+            registrar=ont_registrar,
+        )
+        return {"status": "evolved", **audit.model_dump()}
 
     @app.post("/v1/outbox/flush")
     async def flush_outbox(batch_size: int = 25) -> dict[str, Any]:

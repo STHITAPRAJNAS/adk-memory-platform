@@ -1468,3 +1468,39 @@ async def test_bedrock_openai_and_ollama_model_and_embedding_adapters():
         await mock_http.aclose()
 
 
+@pytest.mark.asyncio
+async def test_retail_omnichannel_suite_and_three_consumption_patterns():
+    """
+    Verifies:
+      1. The 4-Agent Omnichannel Retail & Supply-Chain Example Suite (`examples/retail_omnichannel_suite.py`)
+         and its W3C OWL Turtle specification (`examples/domain_packs/retail_omnichannel_tbox.ttl`).
+      2. All 3 Agent Consumption Patterns (`examples/three_consumption_patterns_demo.py`):
+         - Pattern 1: Direct In-Process SDK (`CompositeMemoryService` + `get_adk_memory_tools`)
+         - Pattern 2: FastAPI REST Service + `RemoteCompositeMemoryService`
+         - Pattern 3: MCP Server (`create_mcp_server`, `MemoryMcpServerTools`, `/v1/mcp/call`)
+    """
+    from pathlib import Path
+    from examples.retail_omnichannel_suite import run_retail_omnichannel_suite
+    from examples.three_consumption_patterns_demo import run_three_consumption_patterns_demo
+
+    ttl_path = (
+        Path(__file__).resolve().parent.parent
+        / "examples"
+        / "domain_packs"
+        / "retail_omnichannel_tbox.ttl"
+    )
+    retail_ttl_spec = DomainPackLoader.from_turtle_file(
+        "retail_omnichannel@1.0.0", ttl_path
+    )
+    assert "RetailCustomer" in retail_ttl_spec.classes
+    assert retail_ttl_spec.relations["ENROLLED_IN_TIER"].is_functional is True
+    assert retail_ttl_spec.relations["SHIPPED_FROM_PRIMARY"].is_functional is True
+
+    retail_res = await run_retail_omnichannel_suite()
+    assert all(retail_res["checks"].values()), f"Retail checks failed: {retail_res['checks']}"
+
+    patterns_res = await run_three_consumption_patterns_demo()
+    assert all(patterns_res.values()), f"Consumption pattern checks failed: {patterns_res}"
+
+
+

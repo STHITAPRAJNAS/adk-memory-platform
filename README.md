@@ -12,7 +12,7 @@ An enterprise-grade, **domain-agnostic**, multi-tenant **Composite Memory SDK, F
 
 - **[Documentation Index](./docs/README.md)**
 - **[Architecture, 3-Layer Ontology & 3-Tier Context Graph Guide](./docs/architecture_and_ontology_guide.md)**
-- **[Real-World Usage & Production Recipes (Multi-Agent, Cloud Auth, Bedrock/Gemini/Ollama, ADK)](./docs/real_world_usage_and_recipes.md)**
+- **[Real-World Usage, Retail/SRE Domain Suites & The 3 Agent Consumption Patterns (SDK, FastAPI, MCP)](./docs/real_world_usage_and_recipes.md)**
 - **[Local Setup, Docker Stack & PyPI Testing Guide](./docs/local_setup_and_testing.md)**
 - **[FastAPI REST, MCP Server & CLI Reference](./docs/api_and_mcp_reference.md)**
 - **[PostgreSQL RLS + `pgvector` HNSW Partitioned DDL](./docs/sql/001_postgres_rls_and_partitions.sql)**
@@ -160,10 +160,14 @@ uv run --extra dev pytest tests/test_composite_memory_platform.py -v
 # 3. Run the live Docker + Multi-Agent Google ADK A2A E2E suite
 uv run --extra dev pytest tests/test_a2a_docker_e2e.py -v -s
 
-# 4. Run the 5-Agent Enterprise Stress & Maturity Benchmark against live Docker
+# 4. Run the 4-Agent Omnichannel Retail Suite & 3 Consumption Patterns (SDK, FastAPI, MCP) Demo
+uv run python examples/retail_omnichannel_suite.py
+uv run python examples/three_consumption_patterns_demo.py
+
+# 5. Run the 5-Agent Enterprise Stress & Maturity Benchmark against live Docker
 uv run python examples/realistic_enterprise_stress_test.py
 
-# 5. Test the published PyPI package in an isolated environment against live Docker
+# 6. Test the published PyPI package in an isolated environment against live Docker
 uv run --isolated --no-project --refresh --with "agentic-composite-memory[all]" \
   python examples/realistic_enterprise_stress_test.py
 ```

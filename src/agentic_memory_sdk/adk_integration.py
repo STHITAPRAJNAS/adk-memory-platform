@@ -26,11 +26,12 @@ class RemoteCompositeMemoryService(BaseMemoryService):
         api_key: str | None = None,
         timeout_sec: float = 10.0,
         client: httpx.AsyncClient | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_sec = timeout_sec
-        self._external_client = client
+        self._external_client = client or http_client
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -173,6 +174,29 @@ class RemoteCompositeMemoryService(BaseMemoryService):
                 "run_id": run_id,
                 "session_id": session_id,
                 "steps": [s.model_dump(mode="json") for s in steps],
+            },
+        )
+
+    async def register_playbook(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        trigger_intent: str,
+        workflow_steps: list[str],
+        resolution_summary: str,
+        share_in_domain: bool = True,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/playbooks/register",
+            {
+                "app_name": app_name,
+                "user_id": user_id,
+                "trigger_intent": trigger_intent,
+                "workflow_steps": workflow_steps,
+                "resolution_summary": resolution_summary,
+                "share_in_domain": share_in_domain,
             },
         )
 

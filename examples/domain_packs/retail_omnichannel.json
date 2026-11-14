@@ -1,0 +1,67 @@
+{
+  "pack_id": "retail_omnichannel@1.0.0",
+  "domain_name": "retail_omnichannel",
+  "version": "1.0.0",
+  "description": "Omnichannel Retail, Merchandising, Loyalty, Order Fulfillment & Returns Ontology",
+  "classes": {
+    "RetailCustomer": "p:Actor",
+    "StoreAssociate": "p:Actor",
+    "ProductSKU": "p:Object",
+    "FulfillmentWarehouse": "p:Object",
+    "RetailStore": "p:Object",
+    "RetailOrder": "p:Event",
+    "ReturnRequest": "p:Event",
+    "LoyaltyTier": "p:Concept",
+    "BrandCollection": "p:Concept"
+  },
+  "relations": [
+    {
+      "predicate": "ENROLLED_IN_TIER",
+      "domain_class": "RetailCustomer",
+      "range_class": "LoyaltyTier",
+      "is_functional": true,
+      "is_transitive": false,
+      "description": "A customer has exactly one active loyalty tier at any point in time; tier upgrades close t_invalid on prior tiers."
+    },
+    {
+      "predicate": "SHIPPED_FROM_PRIMARY",
+      "domain_class": "RetailOrder",
+      "range_class": "FulfillmentWarehouse",
+      "is_functional": true,
+      "is_transitive": false,
+      "description": "Primary fulfillment warehouse assigned to ship an order; warehouse re-routing closes t_invalid on the prior warehouse."
+    },
+    {
+      "predicate": "CONTAINS_SKU",
+      "domain_class": "RetailOrder",
+      "range_class": "ProductSKU",
+      "is_functional": false,
+      "is_transitive": false,
+      "description": "Links an order to the product SKUs purchased in that order."
+    },
+    {
+      "predicate": "STOCKED_AT",
+      "domain_class": "ProductSKU",
+      "range_class": "FulfillmentWarehouse",
+      "is_functional": false,
+      "is_transitive": false,
+      "description": "Indicates which fulfillment centers carry inventory for a ProductSKU."
+    },
+    {
+      "predicate": "PLACED_ORDER",
+      "domain_class": "RetailCustomer",
+      "range_class": "RetailOrder",
+      "is_functional": false,
+      "is_transitive": false,
+      "description": "Links a customer to a retail order they placed."
+    },
+    {
+      "predicate": "FOR_ORDER",
+      "domain_class": "ReturnRequest",
+      "range_class": "RetailOrder",
+      "is_functional": true,
+      "is_transitive": false,
+      "description": "Links a return or exchange request to the original retail order."
+    }
+  ]
+}

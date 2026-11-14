@@ -595,6 +595,10 @@ class PlatformOntologyRegistrar:
         )
         return tbox
 
+    async def onboard_app(self, manifest: AppMemoryManifest) -> CompiledTBox:
+        """Alias for `register_adk_app` to onboard any agent application manifest."""
+        return await self.register_adk_app(manifest)
+
 
 class AsyncCircuitBreaker:
     """Protects the ADK read path from Graph DB outages or latency spikes."""
