@@ -45,13 +45,6 @@ classifiers = [
     "Topic :: Database",
     "Typing :: Typed",
 ]
-
-[project.urls]
-Homepage      = "https://github.com/sthitaprajnas/adk-memory-platform"
-Repository    = "https://github.com/sthitaprajnas/adk-memory-platform"
-Documentation = "https://github.com/sthitaprajnas/adk-memory-platform#readme"
-Changelog     = "https://github.com/sthitaprajnas/adk-memory-platform/blob/main/CHANGELOG.md"
-Issues        = "https://github.com/sthitaprajnas/adk-memory-platform/issues"
 dependencies = [
     "pydantic>=2.7.0",
     "fastapi>=0.111.0",
@@ -64,6 +57,13 @@ dependencies = [
     "google-adk[a2a]>=2.8.0",
     "a2a-sdk>=1.1.2",
 ]
+
+[project.urls]
+Homepage      = "https://github.com/sthitaprajnas/adk-memory-platform"
+Repository    = "https://github.com/sthitaprajnas/adk-memory-platform"
+Documentation = "https://github.com/sthitaprajnas/adk-memory-platform#readme"
+Changelog     = "https://github.com/sthitaprajnas/adk-memory-platform/blob/main/CHANGELOG.md"
+Issues        = "https://github.com/sthitaprajnas/adk-memory-platform/issues"
 
 [project.scripts]
 adk-memory = "agentic_memory_sdk.cli:main"
