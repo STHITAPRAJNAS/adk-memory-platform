@@ -68,10 +68,14 @@ This is the most important modeling decision for **Bi-Temporal Conflict Resoluti
 ```
 - **Recommendation**: Onboard most production agents at **`GovernanceTier.TIER2_DOMAIN_SHARED`** with explicit `subscribed_domain_packs` (e.g., `["retail_omnichannel@1.0.0"]`). Validated TBox facts are shared across collaborating agents in that domain, while novel/unvalidated LLM extractions are safely quarantined in `app:{tenant}:{app}` (`Bucket B`).
 
-### 3.4 Bottom-Up Ontology Evolution (`evolve_app_ontology_from_overflow`)
-- Do **not** let novel LLM entity classes or predicates pollute your shared domain graph unchecked.
-- Let `TBoxRuntimeValidator` quarantine unknown classes/predicates in `app:{tenant}:{app}` with `[OVERFLOW_CANDIDATE]`.
-- Periodically invoke `evolve_app_ontology` (e.g., weekly or after major product launches) with `min_confidence_to_promote=0.80` so recurring, high-confidence concepts are promoted into the governed TBox with full `source_episode_ids` provenance.
+### 3.4 Bottom-Up Ontology Evolution (`evolve_app_ontology_from_overflow`) & Cold-Start Induction (`induce_domain_pack`)
+- **Preventing One-Off Noise with `min_support_count`**:
+  - Do **not** let a single one-off LLM hallucination permanently alter your shared domain schema.
+  - Let `TBoxRuntimeValidator` quarantine unknown classes/predicates in `app:{tenant}:{app}` (`[ProposedClass=...]`, `[ProposedPredicate=...]`).
+  - Periodically invoke `evolve_app_ontology` with `min_support_count=2` (or `3`) and `min_confidence_to_promote=0.80`. The engine automatically canonicalizes plural/casing variants (e.g., `ColdChainShipments` and `cold_chain_shipment` merge into `ColdChainShipment`), pools their support counts, checks empirical `(source_id, target_id)` graph cardinality (`1:1` vs. `1:N`) to infer `is_functional`, and promotes only proven concepts into the governed TBox.
+- **Cold-Start Bootstrapping (`induce_domain_pack`)**:
+  - When onboarding a brand-new business vertical with **zero** existing ontology, pass 10–100 historical support tickets, incident logs, or chat transcripts to `await service.induce_domain_pack(domain_name="...", transcripts=[...], min_support_count=2)` (or `POST /v1/domains/packs/induce` / MCP `induce_domain_pack`).
+  - The platform extracts candidate entities and relationships, canonicalizes and anchors every class under Layer 0 (`p:Actor`, `p:Object`, `p:Event`, `p:Concept`, `p:UserPreference`) using head-noun-aware semantic alignment, infers domain/range constraints and `is_functional` / `is_transitive` rules from empirical cardinality, and registers the Steward-verified `DomainPackSpec`.
 
 ---
 

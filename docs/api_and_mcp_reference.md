@@ -16,6 +16,7 @@ Every Data-Plane, Control-Plane, Playbook, and Maintenance capability is accessi
 | **List / Read Domain Packs** | `registrar._domain_packs` | `GET /v1/domains/packs` | Resource: `memory://domains/packs` |
 | **Register Domain Pack (JSON/Dict)** | `registrar.register_domain_pack(pack)` | `POST /v1/domains/packs` (`/v1/domains/register`) | Tool: `register_domain_pack` |
 | **Steward Review & Refine Domain Pack** | `registrar.review_and_refine_domain_pack(pack)` | `POST /v1/domains/packs/review` | Tool: `register_domain_pack(..., review_with_steward=True)` |
+| **Cold-Start Autonomous Domain Induction** | `service.induce_domain_pack(domain_name, transcripts=..., app_name=...)` | `POST /v1/domains/packs/induce` | Tool: `induce_domain_pack` |
 | **Register W3C OWL/SHACL Turtle (`.ttl`)** | `DomainPackLoader.from_turtle_file(...)` | `POST /v1/domains/packs/turtle` | *(Via `register_domain_pack` or REST)* |
 | **Onboard / Register Agent App** | `registrar.register_adk_app(manifest)` | `POST /v1/apps/register` (`/v1/apps/onboard`) | Tool: `register_app_manifest` |
 | **Inspect App Compiled TBox** | `registry.resolve_context(tenant, app, user)` | `GET /v1/apps/{tenant_id}/{app_name}` | Tool: `inspect_platform_governance(app_name=...)`<br>Resource: `memory://apps/{tenant_id}/{app_name}/tbox` |
@@ -142,6 +143,22 @@ curl -X POST http://localhost:8095/v1/domains/packs \
 #### `POST /v1/domains/packs/review?auto_register=true`
 Passes a proposed `DomainPackSpec` through the **Ontology Intelligence Steward** (roots unanchored classes under Layer 0 Upper Ontology, normalizes predicates to `UPPER_SNAKE_CASE`, infers functional/transitive flags, and logs an `OntologyAuditLogEntry`).
 - **`RemoteCompositeMemoryService` method**: `await client.register_domain_pack(pack_spec, review_with_steward=True)`
+
+#### `POST /v1/domains/packs/induce`
+**Cold-Start Autonomous Ontology Induction**: synthesizes a complete Layer-1 `DomainPackSpec` (canonicalized `PascalCase` singular classes anchored under Layer 0 Upper Ontology, `UPPER_SNAKE_CASE` domain/range relations, and empirical + lexical `is_functional` / `is_transitive` rules) directly from sample conversation transcripts or stored app episodes.
+- **`RemoteCompositeMemoryService` method**: `await client.induce_domain_pack(domain_name="supply_chain", transcripts=[...], min_support_count=2, auto_register=True)`
+```json
+{
+  "domain_name": "supply_chain",
+  "transcripts": [
+    "Order ORD-501 shipped from FC-Seattle-01 and includes SKU-100 and SKU-200.",
+    "Order ORD-502 shipped from FC-Reno-02 and includes SKU-300."
+  ],
+  "min_support_count": 1,
+  "min_confidence": 0.70,
+  "auto_register": true
+}
+```
 
 #### `POST /v1/domains/packs/turtle`
 Compiles and registers a W3C OWL/RDFS/SHACL Turtle (`.ttl`) file into a Layer-1 `DomainPackSpec`.
@@ -285,8 +302,9 @@ Our MCP server (`create_mcp_server` in [`mcp_server.py`](../src/agentic_memory_s
 | `record_decision_trace` | Record Procedural Reasoning Trace | `false` | `false` | `true` | `app_name`, `user_id`, `run_id`, `session_id`, `steps` | Writes `AgentRun -> ToolCall -> Entity` procedural graph trace |
 | `register_playbook` | Register or Reinforce Procedural Playbook | `false` | `false` | `true` | `app_name`, `user_id`, `trigger_intent`, `workflow_steps`, `resolution_summary`, `share_in_domain=True` | Codifies or increments `success_count` on a Tier-3 SOP Playbook |
 | `register_domain_pack` | Register Layer-1 Federated Domain Pack | `false` | `false` | `true` | `pack_id`, `classes`, `relations=None`, `version="1.0.0"`, `review_with_steward=True` | Registers (and optionally Steward-reviews) a Layer-1 Domain Pack |
+| `induce_domain_pack` | Cold-Start Autonomous Domain Pack Induction | `false` | `false` | `true` | `domain_name`, `transcripts=None`, `app_name=None`, `min_support_count=1`, `min_confidence=0.70`, `auto_register=True` | Induces & registers a Layer-1 Domain Pack from raw transcripts or stored app episodes |
 | `register_app_manifest` | Register Agent App Governance Manifest | `false` | `false` | `true` | `tenant_id`, `app_name`, `governance_tier="DOMAIN_SHARED"`, `subscribed_domain_packs=None` | Onboards an agent app and compiles its `CompiledTBox` |
-| `evolve_app_ontology` | Evolve App Ontology from Overflow | `false` | `false` | `true` | `app_name`, `min_confidence_to_promote=0.75` | Promotes high-confidence overflow candidates into the governed TBox |
+| `evolve_app_ontology` | Evolve App Ontology from Overflow | `false` | `false` | `true` | `app_name`, `min_confidence_to_promote=0.75`, `min_support_count=1` | Canonicalizes & promotes overflow candidates meeting confidence and support thresholds |
 | `run_memory_maintenance` | Run Sleep-Time Memory Maintenance | `false` | `false` | `true` | `min_episodes_to_compact=4`, `min_overflow_confidence=0.55` | Runs batch extraction, session compaction, pruning & dossier synthesis |
 | `inspect_platform_governance` | Inspect Platform & App Governance | `true` | `false` | `true` | `app_name=None` | Returns circuit breaker state, Domain Packs, audit count & app TBox |
 | `purge_user_lineage` | GDPR Right-to-be-Forgotten Lineage Purge | `false` | **`true`** | `true` | `app_name`, `user_id` | Cascading deletion across Episodic & Graph tiers (`destructiveHint=true` triggers host confirmation) |

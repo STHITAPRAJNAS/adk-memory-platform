@@ -223,7 +223,10 @@ class RemoteCompositeMemoryService(BaseMemoryService):
         )
 
     async def evolve_app_ontology(
-        self, app_name: str, min_confidence_to_promote: float = 0.75
+        self,
+        app_name: str,
+        min_confidence_to_promote: float = 0.75,
+        min_support_count: int = 1,
     ) -> dict[str, Any]:
         return await self._request(
             "POST",
@@ -231,6 +234,33 @@ class RemoteCompositeMemoryService(BaseMemoryService):
             {
                 "app_name": app_name,
                 "min_confidence_to_promote": min_confidence_to_promote,
+                "min_support_count": min_support_count,
+            },
+        )
+
+    async def induce_domain_pack(
+        self,
+        domain_name: str,
+        *,
+        transcripts: list[str] | None = None,
+        app_name: str | None = None,
+        version: str = "1.0.0",
+        min_support_count: int = 1,
+        min_confidence: float = 0.70,
+        auto_register: bool = True,
+    ) -> dict[str, Any]:
+        """Cold-Start Autonomous Ontology Induction over REST."""
+        return await self._request(
+            "POST",
+            "/v1/domains/packs/induce",
+            {
+                "domain_name": domain_name,
+                "transcripts": transcripts or [],
+                "app_name": app_name,
+                "version": version,
+                "min_support_count": min_support_count,
+                "min_confidence": min_confidence,
+                "auto_register": auto_register,
             },
         )
 

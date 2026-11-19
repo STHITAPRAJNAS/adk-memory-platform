@@ -110,6 +110,20 @@ class GeminiOntologyExtractorAdapter(OntologyExtractorAdapter):
             for r in tbox.relations.values()
         ]
         relations_block = "\n".join(relation_lines)
+        overflow_rule = (
+            "4. EMERGENT ONTOLOGY DISCOVERY (Two-Bucket Mode Enabled):\n"
+            "   - Always prefer `ALLOWED TBOX CLASSES` and `ALLOWED TBOX RELATIONS` when a concept fits.\n"
+            "   - If an important domain entity or relationship is NOT covered by the current TBox, DO NOT "
+            "collapse it into generic 'p:CandidateConcept' or 'RELATED_TO'. Instead, propose a concise, "
+            "singular PascalCase `entity_class` (e.g., 'ColdChainShipment', 'ReturnAuthorization') and a "
+            "descriptive UPPER_SNAKE_CASE `predicate` (e.g., 'REQUIRES_TEMP_ZONE', 'SHIPPED_VIA_CARRIER') "
+            "so the platform's Two-Bucket Runtime Validator can quarantine and auto-evolve the ontology."
+            if tbox.allow_emergent_overflow
+            else (
+                "4. STRICT CLOSED-WORLD TBOX MODE: Use ONLY the listed `ALLOWED TBOX CLASSES` and "
+                "`ALLOWED TBOX RELATIONS`. Classify any out-of-schema entity as 'p:CandidateConcept'."
+            )
+        )
         return (
             "You are an Ontology-Guided Knowledge Graph Extractor & Smart Memory Classifier.\n"
             "1. First, evaluate if the transcript is purely ephemeral social chitchat, pleasantries, or terminal sign-offs "
@@ -122,7 +136,7 @@ class GeminiOntologyExtractorAdapter(OntologyExtractorAdapter):
             "   - 'app_private' for app-specific workflow state or candidate concepts.\n"
             f"ALLOWED TBOX CLASSES: [{allowed_classes}]\n"
             f"ALLOWED TBOX RELATIONS:\n{relations_block}\n"
-            "If an important entity does not fit a specific domain class, classify it as 'p:CandidateConcept'."
+            f"{overflow_rule}"
         )
 
     async def extract(self, transcript: str, tbox: CompiledTBox) -> ExtractionPayload:

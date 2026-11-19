@@ -75,6 +75,17 @@ class RegisterPlaybookRequest(BaseModel):
 class EvolveOntologyRequest(BaseModel):
     app_name: str
     min_confidence_to_promote: float = 0.75
+    min_support_count: int = 1
+
+
+class InduceDomainPackRequest(BaseModel):
+    domain_name: str
+    transcripts: list[str] = Field(default_factory=list)
+    app_name: str | None = None
+    version: str = "1.0.0"
+    min_support_count: int = 1
+    min_confidence: float = 0.70
+    auto_register: bool = True
 
 
 def create_memory_platform_app(
@@ -200,9 +211,34 @@ def create_memory_platform_app(
             "audit_entry": audit.model_dump(),
         }
 
+    @app.post("/v1/domains/packs/induce")
+    async def induce_domain_pack(req: InduceDomainPackRequest) -> dict[str, Any]:
+        """
+        Cold-Start Autonomous Ontology Induction: synthesizes a Layer-1 `DomainPackSpec`
+        from sample conversation transcripts or stored app episodes.
+        """
+        pack, audit, stats = await service.induce_domain_pack(
+            domain_name=req.domain_name,
+            transcripts=req.transcripts or None,
+            app_name=req.app_name,
+            version=req.version,
+            min_support_count=req.min_support_count,
+            min_confidence=req.min_confidence,
+            auto_register=req.auto_register,
+            registrar=ont_registrar,
+        )
+        return {
+            "status": "induced_and_registered" if req.auto_register else "induced",
+            "pack": pack.model_dump(),
+            "audit_entry": audit.model_dump(),
+            "stats": stats,
+        }
+
     @app.post("/v1/domains/evolve/{app_name}")
     async def evolve_app_ontology(
-        app_name: str, min_confidence: float = 0.75
+        app_name: str,
+        min_confidence: float = 0.75,
+        min_support_count: int = 1,
     ) -> dict[str, Any]:
         """
         Bottom-Up Ontology Evolution: scans quarantined overflow in `app:{tenant}:{app}`,
@@ -212,6 +248,7 @@ def create_memory_platform_app(
         audit = await service.evolve_app_ontology_from_overflow(
             app_name=app_name,
             min_confidence_to_promote=min_confidence,
+            min_support_count=min_support_count,
             registrar=ont_registrar,
         )
         return {"status": "evolved", "audit_entry": audit.model_dump()}
@@ -353,6 +390,7 @@ def create_memory_platform_app(
         audit = await service.evolve_app_ontology_from_overflow(
             req.app_name,
             min_confidence_to_promote=req.min_confidence_to_promote,
+            min_support_count=req.min_support_count,
             registrar=ont_registrar,
         )
         return {"status": "evolved", **audit.model_dump()}

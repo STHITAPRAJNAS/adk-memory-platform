@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from collections import defaultdict, deque
-from typing import Tuple
+from typing import Any, Tuple
 
 from .models import (
     AppMemoryManifest,
@@ -356,42 +356,267 @@ class PlatformOntologyRegistrar:
         self.audit_log: list[OntologyAuditLogEntry] = []
 
     @staticmethod
+    def canonicalize_class_name(raw_name: str) -> str:
+        """
+        Normalizes a proposed class name into singular `PascalCase` while preserving
+        Layer 0 (`p:...`) or W3C (`owl:...`) prefixes, preventing duplicate plural/casing
+        variants (e.g., 'cold_chain_shipments' / 'ColdChainShipments' -> 'ColdChainShipment').
+        """
+        cleaned = raw_name.strip()
+        if not cleaned or ":" in cleaned:
+            return cleaned
+        # Split on spaces, underscores, hyphens, or camelCase boundaries
+        tokens = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", cleaned)
+        words = [w for w in re.split(r"[\s_\-]+", tokens) if w]
+        if not words:
+            return cleaned
+        pascal = "".join(w[0].upper() + w[1:] for w in words)
+        low = pascal.lower()
+        protected_endings = (
+            "ss",
+            "us",
+            "is",
+            "ops",
+            "series",
+            "analytics",
+            "logistics",
+            "metrics",
+            "diagnostics",
+            "goods",
+        )
+        if any(low.endswith(end) for end in protected_endings):
+            return pascal
+        if low.endswith("ies") and len(pascal) > 4:
+            return pascal[:-3] + "y"
+        if low.endswith("s") and not low.endswith("es") and len(pascal) > 4:
+            return pascal[:-1]
+        return pascal
+
+    @staticmethod
+    def canonicalize_predicate_name(raw_pred: str) -> str:
+        """
+        Normalizes camelCase, space-separated, or hyphenated predicate names into
+        canonical `UPPER_SNAKE_CASE` (e.g., 'shippedViaCarrier' -> 'SHIPPED_VIA_CARRIER').
+        """
+        cleaned = raw_pred.strip()
+        if not cleaned:
+            return "RELATED_TO"
+        spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cleaned)
+        norm = re.sub(r"[\s\-_]+", "_", spaced).strip("_").upper()
+        return norm or "RELATED_TO"
+
+    @staticmethod
     def infer_upper_concept_parent(class_name: str) -> str:
         """
-        Semantic heuristic + Upper Ontology aligner: maps any unrooted domain class
-        to the appropriate Layer 0 `UpperConceptType` (`p:Actor`, `p:Object`, `p:Event`, `p:UserPreference`, `p:Concept`).
+        Multi-domain head-noun-aware semantic + structural Upper Ontology aligner:
+        Evaluates the head noun (final token in compound PascalCase/snake_case names such as
+        'Order' in 'CustomerOrder' or 'Invoice' in 'VendorInvoice') first before falling back
+        to full-string matching across SRE, Retail, Supply Chain, Finance, Healthcare, SecOps, and CRM.
         """
-        low = class_name.lower()
-        if any(k in low for k in ("user", "actor", "agent", "customer", "person", "team", "owner", "vendor", "patient", "investigator")):
-            return UpperConceptType.ACTOR.value
-        if any(k in low for k in ("event", "incident", "alert", "outage", "trial", "deployment", "transaction", "dispute", "call", "session")):
-            return UpperConceptType.EVENT.value
-        if any(k in low for k in ("pref", "setting", "style", "persona")):
-            return UpperConceptType.PREFERENCE.value
-        if any(k in low for k in ("service", "cluster", "database", "db", "tool", "asset", "system", "region", "device", "drug", "compound", "server", "api", "app")):
-            return UpperConceptType.OBJECT.value
+        spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", class_name.strip())
+        tokens = [t.lower() for t in re.split(r"[\s_\-:]+", spaced) if t]
+        head_noun = tokens[-1] if tokens else class_name.lower()
+        candidates_to_check = [head_noun, class_name.lower()]
+
+        actor_keys = (
+            "user",
+            "actor",
+            "agent",
+            "customer",
+            "person",
+            "team",
+            "owner",
+            "vendor",
+            "patient",
+            "investigator",
+            "physician",
+            "doctor",
+            "nurse",
+            "shopper",
+            "member",
+            "supplier",
+            "carrier",
+            "merchant",
+            "employee",
+            "analyst",
+            "engineer",
+            "organization",
+            "company",
+            "client",
+            "tenant",
+            "buyer",
+            "seller",
+            "courier",
+            "operator",
+        )
+        event_keys = (
+            "event",
+            "incident",
+            "alert",
+            "outage",
+            "trial",
+            "deployment",
+            "transaction",
+            "dispute",
+            "call",
+            "session",
+            "order",
+            "shipment",
+            "delivery",
+            "return",
+            "refund",
+            "payment",
+            "visit",
+            "appointment",
+            "claim",
+            "execution",
+            "workflow",
+            "migration",
+            "release",
+            "promotion",
+            "campaign",
+            "transfer",
+            "audit",
+            "breach",
+            "failover",
+        )
+        pref_keys = (
+            "pref",
+            "preference",
+            "setting",
+            "style",
+            "persona",
+            "habit",
+            "optin",
+            "consent",
+        )
+        obj_keys = (
+            "service",
+            "cluster",
+            "database",
+            "db",
+            "tool",
+            "asset",
+            "system",
+            "region",
+            "device",
+            "drug",
+            "compound",
+            "medication",
+            "server",
+            "api",
+            "app",
+            "sku",
+            "product",
+            "item",
+            "inventory",
+            "warehouse",
+            "store",
+            "center",
+            "facility",
+            "location",
+            "node",
+            "pod",
+            "container",
+            "host",
+            "account",
+            "card",
+            "invoice",
+            "contract",
+            "document",
+            "ticket",
+            "sensor",
+            "vehicle",
+            "package",
+            "parcel",
+            "patch",
+            "locker",
+            "gateway",
+            "router",
+            "ledger",
+        )
+
+        for target in candidates_to_check:
+            if any(k in target for k in pref_keys):
+                return UpperConceptType.PREFERENCE.value
+            if any(k in target for k in event_keys):
+                return UpperConceptType.EVENT.value
+            if any(k in target for k in obj_keys):
+                return UpperConceptType.OBJECT.value
+            if any(k in target for k in actor_keys):
+                return UpperConceptType.ACTOR.value
         return UpperConceptType.CONCEPT.value
 
     @staticmethod
-    def infer_relation_flags(predicate: str) -> tuple[bool, bool]:
+    def infer_relation_flags(
+        predicate: str,
+        observed_pairs: list[tuple[str, str]] | None = None,
+    ) -> tuple[bool, bool]:
         """
-        Infers `(is_functional, is_transitive)` when a service proposes an under-specified relation rule.
+        Infers `(is_functional, is_transitive)` by combining:
+          1. Lexical state/hierarchy indicators (`PRIMARY`, `CURRENT`, `ENROLLED_IN`, `DEPENDS_ON`, etc.).
+          2. Empirical ABox graph cardinality: if `observed_pairs` (`[(source_id, target_id), ...]`) is
+             provided, checks whether any source entity maps to multiple distinct targets (`1:N` ->
+             cannot be functional) or whether `>= 3` distinct source entities all map strictly `1:1`.
         """
-        up = re.sub(r"[\s\-]+", "_", predicate.strip().upper())
-        is_func = any(
+        up = PlatformOntologyRegistrar.canonicalize_predicate_name(predicate)
+        multi_valued_indicators = (
+            "INCLUDES",
+            "CONTAINS",
+            "HAS_ITEMS",
+            "HAS_SKUS",
+            "PURCHASED",
+            "TAGGED_WITH",
+            "AFFECTS",
+            "REFERENCES",
+        )
+        is_explicit_multi = any(tok in up for tok in multi_valued_indicators)
+
+        lexical_func = not is_explicit_multi and any(
             tok in up
             for tok in (
                 "PRIMARY",
                 "CURRENT",
                 "ACTIVE_TIER",
-                "SUBSCRIBED_TO_TIER",
+                "SUBSCRIBED_TO",
+                "ENROLLED_IN",
                 "HAS_STATUS",
                 "ASSIGNED_TO",
                 "OWNED_BY",
                 "MANAGED_BY",
-                "DEPLOYED_IN_PRIMARY",
+                "DEPLOYED_IN",
+                "SHIPPED_FROM_PRIMARY",
+                "LOCATED_IN",
+                "HEADQUARTERED_IN",
+                "ROUTED_TO",
+                "PRICED_AT",
+                "CLASSIFIED_AS",
+                "GOVERNED_BY",
+                "FULFILLED_BY_PRIMARY",
             )
         )
+
+        is_func = lexical_func
+        if observed_pairs:
+            by_source: dict[str, set[str]] = defaultdict(set)
+            for src, tgt in observed_pairs:
+                if src and tgt:
+                    by_source[src].add(tgt)
+            if by_source:
+                max_targets_per_source = max(len(tgts) for tgts in by_source.values())
+                if max_targets_per_source > 1 and not any(
+                    k in up for k in ("PRIMARY", "CURRENT", "ACTIVE_TIER", "HAS_STATUS")
+                ):
+                    # Empirical 1:N observation overrides non-explicit functional assumption
+                    is_func = False
+                elif (
+                    max_targets_per_source == 1
+                    and len(by_source) >= 3
+                    and not is_explicit_multi
+                ):
+                    # Empirical 1:1 across >= 3 distinct source entities indicates functional relation
+                    is_func = True
+
         is_trans = any(
             tok in up
             for tok in (
@@ -400,9 +625,241 @@ class PlatformOntologyRegistrar:
                 "SUBCLASS_OF",
                 "UPSTREAM_OF",
                 "DOWNSTREAM_OF",
+                "LOCATED_WITHIN",
+                "REPORTS_TO",
             )
         )
         return is_func, is_trans
+
+    @classmethod
+    def heuristic_extract_from_transcript(cls, transcript: str) -> ExtractionPayload:
+        """
+        Zero-API-key deterministic pattern & typed-identifier ontology extractor used as a fallback
+        during cold-start `induce_domain_pack` when no external LLM extractor is configured.
+        Recognizes typed enterprise identifiers (`ORD-*`, `SKU-*`, `FC-*`, `INC-*`, `CVE-*`,
+        regions like `us-east-1`, microservices like `payment-router-01`, explicit `Class(Name)` tags)
+        and verb/predicate phrases between them.
+        """
+        entities_by_name: dict[str, ExtractedEntity] = {}
+        facts: list[ExtractedFact] = []
+
+        id_patterns: list[tuple[str, str]] = [
+            (r"\b(ORD-[A-Za-z0-9\-]+)\b", "CustomerOrder"),
+            (r"\b(SKU-[A-Za-z0-9\-]+)\b", "ProductSku"),
+            (r"\b(FC-[A-Za-z0-9\-]+)\b", "FulfillmentCenter"),
+            (r"\b(WH-[A-Za-z0-9\-]+)\b", "WarehouseFacility"),
+            (r"\b(INC-[A-Za-z0-9\-]+)\b", "IncidentEvent"),
+            (r"\b(CVE-\d{4}-\d+)\b", "SecurityVulnerability"),
+            (r"\b(RET-[A-Za-z0-9\-]+)\b", "ReturnAuthorization"),
+            (r"\b(SHP-[A-Za-z0-9\-]+)\b", "ShipmentEvent"),
+            (r"\b((?:us|eu|ap)-(?:east|west|central|south|north)-\d)\b", "CloudRegion"),
+            (r"\b([a-z]+-(?:service|api|router|gateway|db|cluster|worker)(?:-\d+)?)\b", "Microservice"),
+        ]
+        for pat, e_cls in id_patterns:
+            for m in re.finditer(pat, transcript):
+                ename = m.group(1)
+                if ename not in entities_by_name:
+                    entities_by_name[ename] = ExtractedEntity(
+                        canonical_name=ename,
+                        entity_class=e_cls,
+                        summary=f"Auto-induced {e_cls} '{ename}' from transcript",
+                        confidence=0.88,
+                    )
+
+        # Also support explicit `ClassName:EntityName` or `ClassName(EntityName)` annotations in text
+        for m in re.finditer(r"\b([A-Z][A-Za-z0-9]+)\(([A-Za-z0-9_\-\.]+)\)", transcript):
+            c_name = cls.canonicalize_class_name(m.group(1))
+            e_name = m.group(2)
+            entities_by_name[e_name] = ExtractedEntity(
+                canonical_name=e_name,
+                entity_class=c_name,
+                summary=f"Auto-induced {c_name} '{e_name}'",
+                confidence=0.90,
+            )
+
+        ordered_entities = list(entities_by_name.values())
+        verb_map: list[tuple[str, str]] = [
+            ("shipped from primary", "SHIPPED_FROM_PRIMARY"),
+            ("shipped from", "SHIPPED_FROM_PRIMARY"),
+            ("fulfilled by", "FULFILLED_BY_PRIMARY"),
+            ("includes", "INCLUDES_SKU"),
+            ("contains", "INCLUDES_SKU"),
+            ("depends on", "DEPENDS_ON"),
+            ("deployed in", "DEPLOYED_IN"),
+            ("enrolled in", "ENROLLED_IN_TIER"),
+            ("mitigated by", "MITIGATED_BY"),
+            ("affects", "AFFECTS_RESOURCE"),
+            ("assigned to", "ASSIGNED_TO"),
+            ("routed to", "ROUTED_TO"),
+        ]
+        low_text = transcript.lower()
+        for i in range(len(ordered_entities)):
+            for j in range(i + 1, len(ordered_entities)):
+                e1, e2 = ordered_entities[i], ordered_entities[j]
+                idx1 = low_text.find(e1.canonical_name.lower())
+                idx2 = low_text.find(e2.canonical_name.lower())
+                if idx1 == -1 or idx2 == -1:
+                    continue
+                src, tgt = (e1, e2) if idx1 < idx2 else (e2, e1)
+                between = low_text[min(idx1, idx2) : max(idx1, idx2) + len(tgt.canonical_name)]
+                matched_pred = None
+                for phrase, pred_code in verb_map:
+                    if phrase in between:
+                        matched_pred = pred_code
+                        break
+                if matched_pred:
+                    facts.append(
+                        ExtractedFact(
+                            source_entity=src.canonical_name,
+                            source_class=src.entity_class,
+                            predicate=matched_pred,
+                            target_entity=tgt.canonical_name,
+                            target_class=tgt.entity_class,
+                            fact_summary=f"{src.canonical_name} {matched_pred} {tgt.canonical_name}",
+                            confidence=0.88,
+                        )
+                    )
+        return ExtractionPayload(entities=ordered_entities, facts=facts)
+
+    def induce_domain_pack_from_payloads(
+        self,
+        domain_name: str,
+        payloads: list[ExtractionPayload],
+        *,
+        version: str = "1.0.0",
+        min_support_count: int = 1,
+        min_confidence: float = 0.70,
+        tenant_id: str = "platform",
+        auto_register: bool = True,
+    ) -> tuple[DomainPackSpec, OntologyAuditLogEntry, dict[str, Any]]:
+        """
+        Cold-Start Autonomous Ontology Induction Engine:
+        Synthesizes a complete, Layer-0-anchored, Steward-verified `DomainPackSpec` from a corpus
+        of extracted entity/fact payloads by:
+          1. Canonicalizing candidate class names (`PascalCase` singular) and predicate names (`UPPER_SNAKE_CASE`).
+          2. Aggregating multi-episode support counts and average confidence scores.
+          3. Filtering out one-off noise below `min_support_count` or `min_confidence`.
+          4. Inferring each predicate's dominant `(domain_class, range_class)` and empirical + lexical
+             `(is_functional, is_transitive)` flags.
+          5. Passing the induced specification through `review_and_refine_domain_pack`.
+        """
+        upper_set = {c.value for c in UpperConceptType} | {"owl:Thing"}
+        class_counts: dict[str, int] = defaultdict(int)
+        class_conf_sum: dict[str, float] = defaultdict(float)
+
+        pred_counts: dict[str, int] = defaultdict(int)
+        pred_conf_sum: dict[str, float] = defaultdict(float)
+        pred_dom_rng_votes: dict[str, dict[tuple[str, str], int]] = defaultdict(
+            lambda: defaultdict(int)
+        )
+        pred_entity_pairs: dict[str, list[tuple[str, str]]] = defaultdict(list)
+
+        for p in payloads:
+            if p.is_ephemeral_chitchat:
+                continue
+            for ent in p.entities:
+                raw_cls = ent.entity_class.strip()
+                if not raw_cls or raw_cls in upper_set:
+                    m = re.search(r"\[ProposedClass=([^\]]+)\]", ent.summary)
+                    if m:
+                        raw_cls = m.group(1).strip()
+                if not raw_cls or raw_cls in upper_set:
+                    continue
+                can_cls = self.canonicalize_class_name(raw_cls)
+                class_counts[can_cls] += 1
+                class_conf_sum[can_cls] += float(ent.confidence)
+
+            for fact in p.facts:
+                raw_pred = fact.predicate.strip()
+                dom_raw = fact.source_class.strip()
+                rng_raw = fact.target_class.strip()
+                if raw_pred == "RELATED_TO":
+                    m = re.search(
+                        r"\[ProposedPredicate=([^\]|]+)\|([^\->]+)->([^\]]+)\]",
+                        fact.fact_summary,
+                    )
+                    if m:
+                        raw_pred = m.group(1).strip()
+                        dom_raw = m.group(2).strip()
+                        rng_raw = m.group(3).strip()
+                if not raw_pred or raw_pred == "RELATED_TO":
+                    continue
+                can_pred = self.canonicalize_predicate_name(raw_pred)
+                can_dom = (
+                    self.canonicalize_class_name(dom_raw)
+                    if dom_raw and dom_raw not in upper_set
+                    else (dom_raw or "owl:Thing")
+                )
+                can_rng = (
+                    self.canonicalize_class_name(rng_raw)
+                    if rng_raw and rng_raw not in upper_set
+                    else (rng_raw or "owl:Thing")
+                )
+                pred_counts[can_pred] += 1
+                pred_conf_sum[can_pred] += float(fact.confidence)
+                pred_dom_rng_votes[can_pred][(can_dom, can_rng)] += 1
+                pred_entity_pairs[can_pred].append(
+                    (fact.source_entity, fact.target_entity)
+                )
+                for c_candidate in (can_dom, can_rng):
+                    if c_candidate and c_candidate not in upper_set:
+                        class_counts[c_candidate] += 1
+                        class_conf_sum[c_candidate] += float(fact.confidence)
+
+        induced_classes: dict[str, str] = {}
+        for cls_name, cnt in sorted(class_counts.items()):
+            avg_conf = class_conf_sum[cls_name] / max(cnt, 1)
+            if cnt >= min_support_count and avg_conf >= min_confidence:
+                induced_classes[cls_name] = self.infer_upper_concept_parent(cls_name)
+
+        induced_relations: dict[str, RelationRule] = {}
+        for pred_name, cnt in sorted(pred_counts.items()):
+            avg_conf = pred_conf_sum[pred_name] / max(cnt, 1)
+            if cnt < min_support_count or avg_conf < min_confidence:
+                continue
+            votes = pred_dom_rng_votes[pred_name]
+            best_dom, best_rng = max(votes.items(), key=lambda kv: kv[1])[0]
+            for c_ref in (best_dom, best_rng):
+                if c_ref not in upper_set and c_ref not in induced_classes:
+                    induced_classes[c_ref] = self.infer_upper_concept_parent(c_ref)
+            is_func, is_trans = self.infer_relation_flags(
+                pred_name, observed_pairs=pred_entity_pairs[pred_name]
+            )
+            induced_relations[pred_name] = RelationRule(
+                predicate=pred_name,
+                domain_class=best_dom,
+                range_class=best_rng,
+                is_functional=is_func,
+                is_transitive=is_trans,
+                description=f"Auto-induced from corpus (support={cnt}, avg_conf={avg_conf:.2f})",
+            )
+
+        clean_domain = domain_name.split("@")[0]
+        pack_id = (
+            domain_name
+            if "@" in domain_name
+            else f"{clean_domain}@{version}"
+        )
+        draft_pack = DomainPackSpec(
+            pack_id=pack_id,
+            domain_name=clean_domain,
+            version=version,
+            classes=induced_classes,
+            relations=induced_relations,
+        )
+        refined_pack, audit_entry = self.review_and_refine_domain_pack(
+            draft_pack, tenant_id=tenant_id, auto_register=auto_register
+        )
+        stats = {
+            "payloads_analyzed": len(payloads),
+            "min_support_count": min_support_count,
+            "min_confidence": min_confidence,
+            "class_support_counts": dict(class_counts),
+            "predicate_support_counts": dict(pred_counts),
+            "induced_classes_count": len(refined_pack.classes),
+            "induced_relations_count": len(refined_pack.relations),
+        }
+        return refined_pack, audit_entry, stats
 
     def review_and_refine_domain_pack(
         self,

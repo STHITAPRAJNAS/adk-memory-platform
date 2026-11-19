@@ -77,8 +77,11 @@ from .governance import (
     TokenBudgetSerializer,
 )
 from .models import (
+    CompiledTBox,
+    DomainPackSpec,
     EpisodicRecord,
     ExtractionMode,
+    ExtractionPayload,
     GraphEdgeMutation,
     GraphFactReadResult,
     GraphVertexUpsert,
@@ -1076,19 +1079,24 @@ class CompositeMemoryService(BaseMemoryService):
         app_name: str,
         *,
         min_confidence_to_promote: float = 0.75,
+        min_support_count: int = 1,
         registrar: PlatformOntologyRegistrar | None = None,
     ) -> OntologyAuditLogEntry:
         """
         Bottom-Up Automated Schema Evolution:
           1. Scans quarantined overflow vertices (`p:CandidateConcept` with `[ProposedClass=...]`)
              and overflow edges (`RELATED_TO` with `[ProposedPredicate=...]`) in `app:{tenant}:{app}`.
-          2. Evaluates candidate classes and predicates using `PlatformOntologyRegistrar` intelligence
-             (anchoring classes to Layer 0 `UpperConceptType` and inferring functional/transitive flags).
-          3. Modifies the app's live `CompiledTBox` in the registry (bumping `tbox.version`).
-          4. Promotes the quarantined vertices and edges into `ctx.write_namespace` while keeping
+          2. Canonicalizes candidate class names (`PascalCase` singular) and predicate names (`UPPER_SNAKE_CASE`)
+             and aggregates support counts across occurrences (`min_support_count`).
+          3. Evaluates candidate classes and predicates using `PlatformOntologyRegistrar` intelligence
+             (anchoring classes to Layer 0 `UpperConceptType` and inferring functional/transitive flags
+             from both lexical rules and empirical ABox graph cardinality).
+          4. Modifies the app's live `CompiledTBox` in the registry (bumping `tbox.version`).
+          5. Promotes the quarantined vertices and edges into `ctx.write_namespace` while keeping
              all original `source_episode_id`, `t_valid`, `t_created`, and `user_id` provenance intact!
-          5. Appends an immutable `OntologyAuditLogEntry` with `source_episode_ids`.
+          6. Appends an immutable `OntologyAuditLogEntry` with `source_episode_ids`.
         """
+        from collections import defaultdict
         import re
 
         tenant_id, clean_app = self._split_tenant_app(app_name)
@@ -1101,31 +1109,77 @@ class CompositeMemoryService(BaseMemoryService):
         modifications: list[str] = []
         source_ep_ids: set[str] = set()
 
+        class_support: dict[str, int] = defaultdict(int)
+        pred_support: dict[str, int] = defaultdict(int)
+        pred_pairs: dict[str, list[tuple[str, str]]] = defaultdict(list)
+
         # 1. Inspect quarantined candidate vertices (InMemory OR PostgreSQL + Neo4j)
         if hasattr(self.seed_store, "seeds"):
             seeds_dict: dict[tuple[str, str], GraphVertexUpsert] = getattr(
                 self.seed_store, "seeds"
             )
+            matching_seeds: list[tuple[GraphVertexUpsert, str, str]] = []
             for (t_id, _vid), seed in seeds_dict.items():
                 if t_id != tenant_id or seed.namespace != ctx.app_private_namespace:
                     continue
                 m = re.search(r"\[ProposedClass=([^\]]+)\]\s*(.*)", seed.summary)
                 if m:
-                    cand_cls, clean_sum = m.group(1).strip(), m.group(2).strip()
-                    if cand_cls not in tbox.classes:
-                        parent_upper = PlatformOntologyRegistrar.infer_upper_concept_parent(
-                            cand_cls
+                    cand_cls = PlatformOntologyRegistrar.canonicalize_class_name(
+                        m.group(1).strip()
+                    )
+                    clean_sum = m.group(2).strip()
+                    class_support[cand_cls] += 1
+                    matching_seeds.append((seed, cand_cls, clean_sum))
+
+            # Also count class support from high-confidence overflow edges before promoting vertices
+            if hasattr(self.graph, "edges"):
+                for edge in getattr(self.graph, "edges"):
+                    if (
+                        edge.get("tenant_id") == tenant_id
+                        and edge.get("namespace") == ctx.app_private_namespace
+                        and float(edge.get("confidence", 0.0)) >= min_confidence_to_promote
+                    ):
+                        me = re.search(
+                            r"\[ProposedPredicate=([^\]|]+)\|([^\->]+)->([^\]]+)\]",
+                            str(edge.get("fact_summary", "")),
                         )
-                        tbox.classes[cand_cls] = parent_upper
-                        promoted_classes[cand_cls] = parent_upper
-                        modifications.append(
-                            f"Promoted emergent class '{cand_cls}' -> '{parent_upper}' from quarantined overflow"
-                        )
-                    # Promote vertex in-place while preserving vertex_id and provenance
-                    seed.entity_class = cand_cls
-                    seed.upper_class = tbox.resolve_upper_class(cand_cls)
-                    seed.summary = clean_sum
-                    seed.namespace = ctx.write_namespace
+                        if me:
+                            p_norm = PlatformOntologyRegistrar.canonicalize_predicate_name(
+                                me.group(1)
+                            )
+                            d_cls = PlatformOntologyRegistrar.canonicalize_class_name(
+                                me.group(2)
+                            )
+                            r_cls = PlatformOntologyRegistrar.canonicalize_class_name(
+                                me.group(3)
+                            )
+                            pred_support[p_norm] += 1
+                            pred_pairs[p_norm].append(
+                                (
+                                    str(edge.get("source_vertex_id", "")),
+                                    str(edge.get("target_vertex_id", "")),
+                                )
+                            )
+                            for c_ref in (d_cls, r_cls):
+                                if c_ref and c_ref != "owl:Thing":
+                                    class_support[c_ref] += 1
+
+            for seed, cand_cls, clean_sum in matching_seeds:
+                if class_support[cand_cls] < min_support_count:
+                    continue
+                if cand_cls not in tbox.classes:
+                    parent_upper = PlatformOntologyRegistrar.infer_upper_concept_parent(
+                        cand_cls
+                    )
+                    tbox.classes[cand_cls] = parent_upper
+                    promoted_classes[cand_cls] = parent_upper
+                    modifications.append(
+                        f"Promoted emergent class '{cand_cls}' -> '{parent_upper}' from quarantined overflow (support={class_support[cand_cls]})"
+                    )
+                seed.entity_class = cand_cls
+                seed.upper_class = tbox.resolve_upper_class(cand_cls)
+                seed.summary = clean_sum
+                seed.namespace = ctx.write_namespace
         elif hasattr(self.seed_store, "_get_pool"):
             pool = await getattr(self.seed_store, "_get_pool")()
             async with pool.acquire() as conn:
@@ -1138,51 +1192,61 @@ class CompositeMemoryService(BaseMemoryService):
                     tenant_id,
                     ctx.app_private_namespace,
                 )
+                pg_matches: list[tuple[Any, str, str]] = []
                 for r in rows:
                     m = re.search(
                         r"\[ProposedClass=([^\]]+)\]\s*(.*)", r["summary_text"]
                     )
                     if m:
-                        cand_cls, clean_sum = m.group(1).strip(), m.group(2).strip()
-                        if cand_cls not in tbox.classes:
-                            parent_upper = PlatformOntologyRegistrar.infer_upper_concept_parent(
-                                cand_cls
-                            )
-                            tbox.classes[cand_cls] = parent_upper
-                            promoted_classes[cand_cls] = parent_upper
-                            modifications.append(
-                                f"Promoted emergent class '{cand_cls}' -> '{parent_upper}' from PostgreSQL quarantined overflow"
-                            )
-                        upper_c = tbox.resolve_upper_class(cand_cls)
-                        await conn.execute(
-                            """
-                            UPDATE graph_seed_index
-                            SET entity_class = $3, upper_class = $4, summary_text = $5, namespace = $6
-                            WHERE tenant_id = $1 AND neptune_vertex_id = $2
-                            """,
-                            tenant_id,
-                            r["neptune_vertex_id"],
-                            cand_cls,
-                            upper_c,
-                            clean_sum,
-                            ctx.write_namespace,
+                        cand_cls = PlatformOntologyRegistrar.canonicalize_class_name(
+                            m.group(1).strip()
                         )
-                        if hasattr(self.graph, "_run_cypher"):
-                            await getattr(self.graph, "_run_cypher")(
-                                tenant_id,
-                                """
-                                MATCH (n:Entity {`~id`: $vid, tenant_id: $tenant_id})
-                                SET n.entity_class = $cls, n.upper_class = $ucls, n.summary = $sum, n.namespace = $ns
-                                """,
-                                {
-                                    "vid": r["neptune_vertex_id"],
-                                    "tenant_id": tenant_id,
-                                    "cls": cand_cls,
-                                    "ucls": upper_c,
-                                    "sum": clean_sum,
-                                    "ns": ctx.write_namespace,
-                                },
-                            )
+                        clean_sum = m.group(2).strip()
+                        class_support[cand_cls] += 1
+                        pg_matches.append((r, cand_cls, clean_sum))
+
+                for r, cand_cls, clean_sum in pg_matches:
+                    if class_support[cand_cls] < min_support_count:
+                        continue
+                    if cand_cls not in tbox.classes:
+                        parent_upper = PlatformOntologyRegistrar.infer_upper_concept_parent(
+                            cand_cls
+                        )
+                        tbox.classes[cand_cls] = parent_upper
+                        promoted_classes[cand_cls] = parent_upper
+                        modifications.append(
+                            f"Promoted emergent class '{cand_cls}' -> '{parent_upper}' from PostgreSQL quarantined overflow (support={class_support[cand_cls]})"
+                        )
+                    upper_c = tbox.resolve_upper_class(cand_cls)
+                    await conn.execute(
+                        """
+                        UPDATE graph_seed_index
+                        SET entity_class = $3, upper_class = $4, summary_text = $5, namespace = $6
+                        WHERE tenant_id = $1 AND neptune_vertex_id = $2
+                        """,
+                        tenant_id,
+                        r["neptune_vertex_id"],
+                        cand_cls,
+                        upper_c,
+                        clean_sum,
+                        ctx.write_namespace,
+                    )
+                    if hasattr(self.graph, "_run_cypher"):
+                        await getattr(self.graph, "_run_cypher")(
+                            tenant_id,
+                            """
+                            MATCH (n:Entity {`~id`: $vid, tenant_id: $tenant_id})
+                            SET n.entity_class = $cls, n.upper_class = $ucls, n.summary = $sum, n.namespace = $ns
+                            """,
+                            {
+                                "vid": r["neptune_vertex_id"],
+                                "tenant_id": tenant_id,
+                                "cls": cand_cls,
+                                "ucls": upper_c,
+                                "sum": clean_sum,
+                                "ns": ctx.write_namespace,
+                            },
+                        )
 
         # 2. Inspect quarantined candidate edges (InMemory OR Neo4j Cypher)
         if hasattr(self.graph, "edges"):
@@ -1199,22 +1263,30 @@ class CompositeMemoryService(BaseMemoryService):
                     str(edge.get("fact_summary", "")),
                 )
                 if m:
-                    raw_pred, dom_cls, rng_cls, clean_fact = (
+                    raw_pred, dom_raw, rng_raw, clean_fact = (
                         m.group(1).strip(),
                         m.group(2).strip(),
                         m.group(3).strip(),
                         m.group(4).strip(),
                     )
-                    norm_pred = re.sub(r"[\s\-]+", "_", raw_pred.upper())
+                    norm_pred = PlatformOntologyRegistrar.canonicalize_predicate_name(
+                        raw_pred
+                    )
+                    if pred_support[norm_pred] < min_support_count:
+                        continue
+                    dom_cls = PlatformOntologyRegistrar.canonicalize_class_name(dom_raw)
+                    rng_cls = PlatformOntologyRegistrar.canonicalize_class_name(rng_raw)
                     for c_name in (dom_cls, rng_cls):
                         if c_name not in tbox.classes and c_name != "owl:Thing":
-                            p_up = PlatformOntologyRegistrar.infer_upper_concept_parent(c_name)
+                            p_up = PlatformOntologyRegistrar.infer_upper_concept_parent(
+                                c_name
+                            )
                             tbox.classes[c_name] = p_up
                             promoted_classes[c_name] = p_up
 
                     if norm_pred not in tbox.relations:
                         is_func, is_trans = PlatformOntologyRegistrar.infer_relation_flags(
-                            norm_pred
+                            norm_pred, observed_pairs=pred_pairs[norm_pred]
                         )
                         rule = RelationRule(
                             predicate=norm_pred,
@@ -1227,7 +1299,7 @@ class CompositeMemoryService(BaseMemoryService):
                         tbox.relations[norm_pred] = rule
                         promoted_relations[norm_pred] = rule.model_dump()
                         modifications.append(
-                            f"Promoted emergent relation '{norm_pred}' ({dom_cls} -> {rng_cls}, functional={is_func})"
+                            f"Promoted emergent relation '{norm_pred}' ({dom_cls} -> {rng_cls}, functional={is_func}, support={pred_support[norm_pred]})"
                         )
 
                     # Promote edge in-place while keeping source_episode_id, t_valid, t_created intact!
@@ -1240,9 +1312,10 @@ class CompositeMemoryService(BaseMemoryService):
             cypher_rows = await getattr(self.graph, "_run_cypher")(
                 tenant_id,
                 """
-                MATCH ()-[r:RELATES {tenant_id: $tenant_id, namespace: $ns}]->()
+                MATCH (s:Entity)-[r:RELATES {tenant_id: $tenant_id, namespace: $ns}]->(t:Entity)
                 WHERE r.confidence >= $min_conf AND r.fact_summary STARTS WITH '[ProposedPredicate='
-                RETURN r.edge_id AS edge_id, r.fact_summary AS fact_summary, r.source_episode_id AS ep_id
+                RETURN r.edge_id AS edge_id, r.fact_summary AS fact_summary, r.source_episode_id AS ep_id,
+                       coalesce(s.vertex_id, s.`~id`) AS src_id, coalesce(t.vertex_id, t.`~id`) AS tgt_id
                 """,
                 {
                     "tenant_id": tenant_id,
@@ -1256,13 +1329,33 @@ class CompositeMemoryService(BaseMemoryService):
                     str(r.get("fact_summary", "")),
                 )
                 if m:
-                    raw_pred, dom_cls, rng_cls, clean_fact = (
+                    p_norm = PlatformOntologyRegistrar.canonicalize_predicate_name(
+                        m.group(1)
+                    )
+                    pred_support[p_norm] += 1
+                    pred_pairs[p_norm].append(
+                        (str(r.get("src_id", "")), str(r.get("tgt_id", "")))
+                    )
+
+            for r in cypher_rows:
+                m = re.search(
+                    r"\[ProposedPredicate=([^\]|]+)\|([^\->]+)->([^\]]+)\]\s*(.*)",
+                    str(r.get("fact_summary", "")),
+                )
+                if m:
+                    raw_pred, dom_raw, rng_raw, clean_fact = (
                         m.group(1).strip(),
                         m.group(2).strip(),
                         m.group(3).strip(),
                         m.group(4).strip(),
                     )
-                    norm_pred = re.sub(r"[\s\-]+", "_", raw_pred.upper())
+                    norm_pred = PlatformOntologyRegistrar.canonicalize_predicate_name(
+                        raw_pred
+                    )
+                    if pred_support[norm_pred] < min_support_count:
+                        continue
+                    dom_cls = PlatformOntologyRegistrar.canonicalize_class_name(dom_raw)
+                    rng_cls = PlatformOntologyRegistrar.canonicalize_class_name(rng_raw)
                     for c_name in (dom_cls, rng_cls):
                         if c_name not in tbox.classes and c_name != "owl:Thing":
                             p_up = PlatformOntologyRegistrar.infer_upper_concept_parent(
@@ -1272,7 +1365,7 @@ class CompositeMemoryService(BaseMemoryService):
                             promoted_classes[c_name] = p_up
                     if norm_pred not in tbox.relations:
                         is_func, is_trans = PlatformOntologyRegistrar.infer_relation_flags(
-                            norm_pred
+                            norm_pred, observed_pairs=pred_pairs[norm_pred]
                         )
                         rule = RelationRule(
                             predicate=norm_pred,
@@ -1285,7 +1378,7 @@ class CompositeMemoryService(BaseMemoryService):
                         tbox.relations[norm_pred] = rule
                         promoted_relations[norm_pred] = rule.model_dump()
                         modifications.append(
-                            f"Promoted emergent relation '{norm_pred}' ({dom_cls} -> {rng_cls}, functional={is_func})"
+                            f"Promoted emergent relation '{norm_pred}' ({dom_cls} -> {rng_cls}, functional={is_func}, support={pred_support[norm_pred]})"
                         )
                     await getattr(self.graph, "_run_cypher")(
                         tenant_id,
@@ -1339,3 +1432,67 @@ class CompositeMemoryService(BaseMemoryService):
         if registrar is not None:
             registrar.audit_log.append(audit_entry)
         return audit_entry
+
+    async def induce_domain_pack(
+        self,
+        domain_name: str,
+        *,
+        transcripts: list[str] | None = None,
+        app_name: str | None = None,
+        version: str = "1.0.0",
+        min_support_count: int = 1,
+        min_confidence: float = 0.70,
+        auto_register: bool = True,
+        registrar: PlatformOntologyRegistrar | None = None,
+    ) -> tuple[DomainPackSpec, OntologyAuditLogEntry, dict[str, Any]]:
+        """
+        Cold-Start Autonomous Ontology Induction:
+        Synthesizes a complete Layer-1 `DomainPackSpec` (classes anchored under Layer 0 Upper Ontology,
+        typed domain/range relations, and empirical + lexical `is_functional` / `is_transitive` rules)
+        from either:
+          1. A provided list of raw `transcripts` (conversations, incident logs, tickets, or docs), OR
+          2. Stored episodic memories for `app_name` when `transcripts` is omitted.
+        """
+        ont_registrar = registrar or PlatformOntologyRegistrar(self.registry)
+        corpus: list[str] = list(transcripts or [])
+        tenant_id = "platform"
+
+        if not corpus and app_name:
+            tenant_id, clean_app = self._split_tenant_app(app_name)
+            if hasattr(self.seed_store, "episodes"):
+                for ep in getattr(self.seed_store, "episodes"):
+                    if ep.tenant_id == tenant_id and ep.app_name == clean_app:
+                        corpus.append(ep.content_text)
+            elif hasattr(self.seed_store, "_get_pool"):
+                pool = await getattr(self.seed_store, "_get_pool")()
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT content_text FROM episodic_memories
+                        WHERE tenant_id = $1 AND app_name = $2
+                        ORDER BY created_at DESC LIMIT 100
+                        """,
+                        tenant_id,
+                        clean_app,
+                    )
+                    corpus.extend(r["content_text"] for r in rows)
+
+        discovery_tbox = CompiledTBox(allow_emergent_overflow=True)
+        payloads: list[ExtractionPayload] = []
+        for text in corpus:
+            extracted = await self.extractor.extract(text, discovery_tbox)
+            if not extracted.entities and not extracted.facts:
+                extracted = PlatformOntologyRegistrar.heuristic_extract_from_transcript(
+                    text
+                )
+            payloads.append(extracted)
+
+        return ont_registrar.induce_domain_pack_from_payloads(
+            domain_name=domain_name,
+            payloads=payloads,
+            version=version,
+            min_support_count=min_support_count,
+            min_confidence=min_confidence,
+            tenant_id=tenant_id,
+            auto_register=auto_register,
+        )

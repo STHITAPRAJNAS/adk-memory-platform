@@ -29,6 +29,7 @@ class MemoryMcpServerTools:
         "record_decision_trace",
         "register_playbook",
         "register_domain_pack",
+        "induce_domain_pack",
         "register_app_manifest",
         "evolve_app_ontology",
         "run_memory_maintenance",
@@ -248,14 +249,47 @@ class MemoryMcpServerTools:
         self,
         app_name: str,
         min_confidence_to_promote: float = 0.75,
+        min_support_count: int = 1,
     ) -> dict[str, Any]:
         """Promotes high-confidence quarantined overflow classes & predicates into the governed TBox."""
         audit = await self.service.evolve_app_ontology_from_overflow(
             app_name=app_name,
             min_confidence_to_promote=min_confidence_to_promote,
+            min_support_count=min_support_count,
             registrar=self.registrar,
         )
         return {"status": "evolved", **audit.model_dump()}
+
+    async def induce_domain_pack(
+        self,
+        domain_name: str,
+        transcripts: list[str] | None = None,
+        app_name: str | None = None,
+        version: str = "1.0.0",
+        min_support_count: int = 1,
+        min_confidence: float = 0.70,
+        auto_register: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Cold-Start Autonomous Ontology Induction: synthesizes a Layer-1 `DomainPackSpec`
+        from sample conversation transcripts or stored app episodes.
+        """
+        pack, audit, stats = await self.service.induce_domain_pack(
+            domain_name=domain_name,
+            transcripts=transcripts,
+            app_name=app_name,
+            version=version,
+            min_support_count=min_support_count,
+            min_confidence=min_confidence,
+            auto_register=auto_register,
+            registrar=self.registrar,
+        )
+        return {
+            "status": "induced_and_registered" if auto_register else "induced",
+            "pack": pack.model_dump(),
+            "audit_entry": audit.model_dump(),
+            "stats": stats,
+        }
 
     async def run_memory_maintenance(
         self,
@@ -466,6 +500,24 @@ def create_mcp_server(
         ),
         structured_output=True,
     )(tools.register_domain_pack)
+
+    mcp.tool(
+        name="induce_domain_pack",
+        title="Cold-Start Autonomous Domain Pack Induction",
+        description=(
+            "Automatically induce and register a Layer-1 Federated Domain Pack (classes anchored "
+            "under Layer 0 Upper Ontology, domain/range relations, and empirical functional/transitive "
+            "flags) from raw sample transcripts or stored app episodes."
+        ),
+        annotations=_ann(
+            "Cold-Start Autonomous Domain Pack Induction",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
+    )(tools.induce_domain_pack)
 
     mcp.tool(
         name="register_app_manifest",

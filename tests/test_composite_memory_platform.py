@@ -971,7 +971,7 @@ async def test_ontology_review_auto_evolution_from_overflow_and_audit_provenance
     refined_pack, review_audit = registrar.review_and_refine_domain_pack(draft_pack, tenant_id="t1")
     assert refined_pack.version == "1.0.1"
     assert refined_pack.classes["CarrierAgent"] == "p:Actor"
-    assert refined_pack.classes["WarehouseFacility"] == "p:Concept"
+    assert refined_pack.classes["WarehouseFacility"] == "p:Object"
     assert refined_pack.relations["ASSIGNED_TO_PRIMARY"].is_functional is True
     assert refined_pack.relations["DEPENDS_ON"].is_transitive is True
     assert review_audit.action == "LLM_REVIEW_AND_REFINE"
@@ -1538,7 +1538,8 @@ async def test_latest_mcp_protocol_2026_07_28_and_2025_11_25_streamable_http():
         assert meta_resp.status_code == 200
         meta_json = meta_resp.json()
         assert meta_json["protocol_version"] == "2026-07-28"
-        assert len(meta_json["tools"]) == 11
+        assert len(meta_json["tools"]) == 12
+        assert "induce_domain_pack" in meta_json["tools"]
         assert len(meta_json["resources"]) == 4
         assert len(meta_json["prompts"]) == 2
 
@@ -1553,7 +1554,7 @@ async def test_latest_mcp_protocol_2026_07_28_and_2025_11_25_streamable_http():
         )
         assert r_tools.status_code == 200
         tools_list = r_tools.json()["result"]["tools"]
-        assert len(tools_list) == 11
+        assert len(tools_list) == 12
         by_name = {t["name"]: t for t in tools_list}
         assert by_name["recall_context"]["annotations"]["readOnlyHint"] is True
         assert by_name["recall_context"]["annotations"]["destructiveHint"] is False
@@ -1631,6 +1632,182 @@ async def test_latest_mcp_protocol_2026_07_28_and_2025_11_25_streamable_http():
         prompt_names = {p["name"] for p in r_prompts.json()["result"]["prompts"]}
         assert "memory_grounded_assistant" in prompt_names
         assert "ontology_steward_domain_designer" in prompt_names
+
+
+@pytest.mark.asyncio
+async def test_autonomous_ontology_induction_canonicalization_and_empirical_cardinality():
+    """
+    Verifies all 4 Autonomous Ontology Discovery & Evolution upgrades:
+      1. LLM Extractor Two-Bucket Prompt instructs models to emit descriptive PascalCase classes
+         and UPPER_SNAKE_CASE predicates when `allow_emergent_overflow=True`.
+      2. Class & Predicate Canonicalization (`ColdChainShipments` / `cold_chain_shipment` -> `ColdChainShipment`,
+         `shippedViaCarrier` -> `SHIPPED_VIA_CARRIER`) + Multi-Domain Layer-0 Upper Ontology parent inference
+         (Retail, Healthcare, Supply Chain, Finance, SRE).
+      3. Multi-occurrence `min_support_count` gating + Empirical ABox Graph Cardinality inference
+         (`1:1` functional vs. `1:N` multi-valued) in `evolve_app_ontology_from_overflow`.
+      4. Cold-Start Autonomous Domain Pack Induction (`induce_domain_pack`) across SDK, FastAPI REST
+         (`POST /v1/domains/packs/induce`), and MCP (`induce_domain_pack`).
+    """
+    from agentic_memory_sdk.llm_extractors import GeminiOntologyExtractorAdapter
+
+    # 1. Verify Two-Bucket Discovery Prompt vs Strict Closed-World Prompt
+    open_tbox = CompiledTBox(allow_emergent_overflow=True)
+    closed_tbox = CompiledTBox(allow_emergent_overflow=False)
+    open_prompt = GeminiOntologyExtractorAdapter.build_tbox_system_instruction(open_tbox)
+    closed_prompt = GeminiOntologyExtractorAdapter.build_tbox_system_instruction(closed_tbox)
+    assert "EMERGENT ONTOLOGY DISCOVERY" in open_prompt
+    assert "PascalCase" in open_prompt
+    assert "STRICT CLOSED-WORLD TBOX MODE" in closed_prompt
+
+    # 2. Verify Canonicalization & Expanded Multi-Domain Layer-0 Alignment
+    assert PlatformOntologyRegistrar.canonicalize_class_name("cold_chain_shipments") == "ColdChainShipment"
+    assert PlatformOntologyRegistrar.canonicalize_class_name("ColdChainShipments") == "ColdChainShipment"
+    assert PlatformOntologyRegistrar.canonicalize_class_name("ReturnPolicies") == "ReturnPolicy"
+    assert PlatformOntologyRegistrar.canonicalize_class_name("OrderStatus") == "OrderStatus"
+    assert PlatformOntologyRegistrar.canonicalize_predicate_name("shippedViaCarrier") == "SHIPPED_VIA_CARRIER"
+
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("FulfillmentWarehouse") == "p:Object"
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("AttendingPhysician") == "p:Actor"
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("ColdChainShipment") == "p:Event"
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("LoyaltyTier") == "p:Concept"
+
+    # Empirical 1:N observation overrides non-explicit functional assumption, while >=3 1:1 pairs infer functional
+    func_1_to_1, _ = PlatformOntologyRegistrar.infer_relation_flags(
+        "HANDLED_BY_COURIER",
+        observed_pairs=[("SHP-1", "COUR-A"), ("SHP-2", "COUR-B"), ("SHP-3", "COUR-A")],
+    )
+    assert func_1_to_1 is True
+    func_1_to_n, _ = PlatformOntologyRegistrar.infer_relation_flags(
+        "INCLUDES_SKU",
+        observed_pairs=[("ORD-1", "SKU-1"), ("ORD-1", "SKU-2")],
+    )
+    assert func_1_to_n is False
+
+    # 3. Verify `min_support_count=2` gating + synonym pooling in `evolve_app_ontology_from_overflow`
+    store = InMemoryUnifiedAdapter()
+    extractor = RuleBasedMockExtractorAdapter()
+    service = CompositeMemoryService(
+        registry_adapter=store,
+        seed_store_adapter=store,
+        graph_adapter=store,
+        embedding_adapter=DeterministicHashEmbeddingAdapter(),
+        extractor_adapter=extractor,
+    )
+    registrar = PlatformOntologyRegistrar(store)
+    await registrar.register_adk_app(
+        AppMemoryManifest(
+            tenant_id="t_induce",
+            app_name="cold_chain_agent",
+            governance_tier=GovernanceTier.TIER2_DOMAIN_SHARED,
+            allow_emergent_overflow=True,
+        )
+    )
+
+    # Turn 1: `ColdChainShipments` appears once, `NoiseArtifact` appears once
+    extractor.enqueue(
+        ExtractionPayload(
+            entities=[
+                ExtractedEntity(
+                    canonical_name="SHP-901",
+                    entity_class="ColdChainShipments",
+                    summary="Vaccine cold chain shipment 901",
+                    confidence=0.92,
+                ),
+                ExtractedEntity(
+                    canonical_name="NOISE-1",
+                    entity_class="OneOffHallucination",
+                    summary="Single-occurrence noise entity",
+                    confidence=0.85,
+                ),
+            ],
+            facts=[],
+        )
+    )
+    await service.add_events_to_memory(
+        app_name="t_induce:cold_chain_agent",
+        user_id="ops_1",
+        events=[_make_event("ColdChainShipments SHP-901 departed")],
+    )
+
+    # Turn 2: `cold_chain_shipment` appears a second time (pools with `ColdChainShipments` -> support=2!)
+    extractor.enqueue(
+        ExtractionPayload(
+            entities=[
+                ExtractedEntity(
+                    canonical_name="SHP-902",
+                    entity_class="cold_chain_shipment",
+                    summary="Biologics cold chain shipment 902",
+                    confidence=0.94,
+                ),
+            ],
+            facts=[],
+        )
+    )
+    await service.add_events_to_memory(
+        app_name="t_induce:cold_chain_agent",
+        user_id="ops_1",
+        events=[_make_event("cold_chain_shipment SHP-902 departed")],
+    )
+
+    # Evolve with min_support_count=2: `ColdChainShipment` (support=2) is promoted, `OneOffHallucination` (support=1) stays quarantined!
+    audit = await service.evolve_app_ontology_from_overflow(
+        "t_induce:cold_chain_agent",
+        min_confidence_to_promote=0.80,
+        min_support_count=2,
+        registrar=registrar,
+    )
+    assert "ColdChainShipment" in audit.added_or_modified_classes
+    assert audit.added_or_modified_classes["ColdChainShipment"] == "p:Event"
+    assert "OneOffHallucination" not in audit.added_or_modified_classes
+
+    # 4. Verify Cold-Start Autonomous Domain Pack Induction (`induce_domain_pack`) via FastAPI & MCP
+    app = create_memory_platform_app(
+        service=service, registrar=registrar, enable_outbox_worker=False
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1",
+    ) as client:
+        remote_client = RemoteCompositeMemoryService(
+            base_url="http://127.0.0.1", http_client=client
+        )
+        induced_res = await remote_client.induce_domain_pack(
+            domain_name="supply_chain_auto",
+            transcripts=[
+                "Order ORD-501 shipped from FC-Seattle-01 and includes SKU-100 and SKU-200.",
+                "Order ORD-502 shipped from FC-Reno-02 and includes SKU-300.",
+                "Microservice order-router-01 depends on inventory-service-01 and deployed in us-west-2.",
+            ],
+            min_support_count=1,
+            auto_register=True,
+        )
+        assert induced_res["status"] == "induced_and_registered"
+        pack_data = induced_res["pack"]
+        assert pack_data["classes"]["CustomerOrder"] == "p:Event"
+        assert pack_data["classes"]["FulfillmentCenter"] == "p:Object"
+        assert pack_data["classes"]["ProductSku"] == "p:Object"
+        assert pack_data["relations"]["SHIPPED_FROM_PRIMARY"]["is_functional"] is True
+        assert pack_data["relations"]["INCLUDES_SKU"]["is_functional"] is False
+        assert pack_data["relations"]["DEPENDS_ON"]["is_transitive"] is True
+
+        # Also test MCP `induce_domain_pack` via `/v1/mcp/call`
+        mcp_induce = await client.post(
+            "/v1/mcp/call",
+            json={
+                "tool_name": "induce_domain_pack",
+                "arguments": {
+                    "domain_name": "secops_auto",
+                    "transcripts": [
+                        "Incident INC-9001 affects payment-gateway-01 and mitigated by Patch(KB-5501)."
+                    ],
+                },
+            },
+        )
+        assert mcp_induce.status_code == 200
+        mcp_pack = mcp_induce.json()["result"]["pack"]
+        assert "IncidentEvent" in mcp_pack["classes"]
+        assert "MITIGATED_BY" in mcp_pack["relations"]
+
 
 
 
