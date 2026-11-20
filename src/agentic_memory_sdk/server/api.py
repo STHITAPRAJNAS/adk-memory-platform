@@ -88,6 +88,31 @@ class InduceDomainPackRequest(BaseModel):
     auto_register: bool = True
 
 
+class SqlDdlDomainPackRequest(BaseModel):
+    pack_id: str
+    sql_ddl: str
+    review_with_steward: bool = True
+
+
+class OssieDomainPackRequest(BaseModel):
+    pack_id: str
+    ossie_content: str | dict[str, Any]
+    review_with_steward: bool = True
+
+
+class CertifyDomainPackRequest(BaseModel):
+    pack_id: str
+    certified_by: str = "domain_steward"
+
+
+class CheckAnswerableRequest(BaseModel):
+    app_name: str
+    user_id: str
+    query: str
+    as_of_iso: str | None = None
+    max_hops: int = 2
+
+
 def create_memory_platform_app(
     service: CompositeMemoryService,
     registrar: PlatformOntologyRegistrar | None = None,
@@ -150,7 +175,7 @@ def create_memory_platform_app(
 
     app = FastAPI(
         title="ADK Enterprise Composite Memory Platform API",
-        version="0.1.4",
+        version="0.1.5",
         description=(
             "Domain-Agnostic Multi-Tenant Memory Service combining Episodic Memory, "
             "Stratified Ontology (TBox), Bi-Temporal Graph KB (ABox), and Reasoning Traces."
@@ -276,6 +301,85 @@ def create_memory_platform_app(
             "relations": {k: v.model_dump() for k, v in pack.relations.items()},
         }
 
+    @app.post("/v1/domains/packs/sql-ddl")
+    async def register_domain_pack_from_sql_ddl(
+        req: SqlDdlDomainPackRequest,
+    ) -> dict[str, Any]:
+        """Compiles and registers a relational SQL DDL schema (`CREATE TABLE ...`) as a Layer-1 Domain Pack."""
+        pack = DomainPackLoader.from_sql_ddl(req.pack_id, req.sql_ddl)
+        if req.review_with_steward:
+            pack, audit = ont_registrar.review_and_refine_domain_pack(
+                pack, auto_register=True
+            )
+            return {
+                "status": "reviewed_and_registered",
+                "pack_id": pack.pack_id,
+                "domain_name": pack.domain_name,
+                "classes": pack.classes,
+                "relations": {k: v.model_dump() for k, v in pack.relations.items()},
+                "synonyms": pack.synonyms,
+                "audit_entry": audit.model_dump(),
+            }
+        ont_registrar.register_domain_pack(pack)
+        return {
+            "status": "registered",
+            "pack_id": pack.pack_id,
+            "domain_name": pack.domain_name,
+            "classes": pack.classes,
+            "relations": {k: v.model_dump() for k, v in pack.relations.items()},
+            "synonyms": pack.synonyms,
+        }
+
+    @app.post("/v1/domains/packs/ossie")
+    async def register_domain_pack_from_ossie(
+        req: OssieDomainPackRequest,
+    ) -> dict[str, Any]:
+        """Compiles and registers an Apache Ossie / BI Semantic Model (YAML or JSON) as a Layer-1 Domain Pack."""
+        pack = DomainPackLoader.from_ossie_yaml(req.pack_id, req.ossie_content)
+        if req.review_with_steward:
+            pack, audit = ont_registrar.review_and_refine_domain_pack(
+                pack, auto_register=True
+            )
+            return {
+                "status": "reviewed_and_registered",
+                "pack_id": pack.pack_id,
+                "domain_name": pack.domain_name,
+                "classes": pack.classes,
+                "relations": {k: v.model_dump() for k, v in pack.relations.items()},
+                "synonyms": pack.synonyms,
+                "certified": pack.certified,
+                "audit_entry": audit.model_dump(),
+            }
+        ont_registrar.register_domain_pack(pack)
+        return {
+            "status": "registered",
+            "pack_id": pack.pack_id,
+            "domain_name": pack.domain_name,
+            "classes": pack.classes,
+            "relations": {k: v.model_dump() for k, v in pack.relations.items()},
+            "synonyms": pack.synonyms,
+            "certified": pack.certified,
+        }
+
+    @app.post("/v1/domains/packs/certify")
+    async def certify_domain_pack(
+        req: CertifyDomainPackRequest,
+    ) -> dict[str, Any]:
+        """Marks a registered or auto-induced Domain Pack as steward-certified (`certified=True`)."""
+        try:
+            pack, audit = ont_registrar.certify_domain_pack(
+                pack_id=req.pack_id, certified_by=req.certified_by
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "status": "certified",
+            "pack_id": pack.pack_id,
+            "certified": pack.certified,
+            "certified_by": pack.certified_by,
+            "audit_entry": audit.model_dump(),
+        }
+
     @app.post("/v1/apps/register")
     @app.post("/v1/apps/onboard")
     async def register_adk_app(manifest: AppMemoryManifest) -> dict[str, Any]:
@@ -355,6 +459,21 @@ def create_memory_platform_app(
                 }
             )
         return {"memories": serialized}
+
+    @app.post("/v1/memory/check-answerable")
+    async def check_answerable(req: CheckAnswerableRequest) -> dict[str, Any]:
+        """
+        Pre-flight Ontology & 3-Tier Memory Answerability / Coverage Check:
+        Evaluates whether the app's governed TBox and 3-Tier Memory cover the concepts in `req.query`.
+        """
+        return await service.check_answerable(
+            app_name=req.app_name,
+            user_id=req.user_id,
+            query=req.query,
+            as_of_iso=req.as_of_iso,
+            max_hops=req.max_hops,
+            registrar=ont_registrar,
+        )
 
     @app.post("/v1/traces")
     @app.post("/v1/traces/record")

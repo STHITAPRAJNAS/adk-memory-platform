@@ -84,6 +84,15 @@ class DomainPackSpec(BaseModel):
     )
     disjoint_classes: list[tuple[str, str]] = Field(default_factory=list)
     relations: dict[str, RelationRule] = Field(default_factory=dict)
+    synonyms: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Optional mapping of canonical class/predicate name -> business synonyms (e.g. from Apache Ossie)",
+    )
+    certified: bool = Field(
+        default=False,
+        description="Whether this Domain Pack has been certified by a domain expert or ontology steward",
+    )
+    certified_by: str | None = None
 
 
 class AppMemoryManifest(BaseModel):
@@ -432,6 +441,8 @@ class OntologyAuditLogEntry(BaseModel):
         "REGISTER_APP_MANIFEST",
         "LLM_REVIEW_AND_REFINE",
         "AUTO_EVOLVE_FROM_OVERFLOW",
+        "CERTIFY_DOMAIN_PACK",
+        "INDUCE_DOMAIN_PACK",
     ]
     previous_version: str = "0.0.0"
     new_version: str = "1.0.0"

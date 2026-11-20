@@ -274,6 +274,74 @@ class RemoteCompositeMemoryService(BaseMemoryService):
             f"/v1/maintenance/run?min_episodes_to_compact={min_episodes_to_compact}&min_overflow_confidence={min_overflow_confidence}",
         )
 
+    async def check_answerable(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        query: str,
+        as_of_iso: str | None = None,
+        max_hops: int = 2,
+    ) -> dict[str, Any]:
+        """Pre-flight Ontology & 3-Tier Memory Answerability / Coverage Check over REST."""
+        return await self._request(
+            "POST",
+            "/v1/memory/check-answerable",
+            {
+                "app_name": app_name,
+                "user_id": user_id,
+                "query": query,
+                "as_of_iso": as_of_iso,
+                "max_hops": max_hops,
+            },
+        )
+
+    async def register_domain_pack_from_sql_ddl(
+        self,
+        pack_id: str,
+        sql_ddl: str,
+        review_with_steward: bool = True,
+    ) -> dict[str, Any]:
+        """Compiles and registers a relational SQL DDL schema (`CREATE TABLE ...`) as a Layer-1 Domain Pack."""
+        return await self._request(
+            "POST",
+            "/v1/domains/packs/sql-ddl",
+            {
+                "pack_id": pack_id,
+                "sql_ddl": sql_ddl,
+                "review_with_steward": review_with_steward,
+            },
+        )
+
+    async def register_domain_pack_from_ossie(
+        self,
+        pack_id: str,
+        ossie_content: str | dict[str, Any],
+        review_with_steward: bool = True,
+    ) -> dict[str, Any]:
+        """Compiles and registers an Apache Ossie / BI Semantic Model (YAML or JSON) as a Layer-1 Domain Pack."""
+        return await self._request(
+            "POST",
+            "/v1/domains/packs/ossie",
+            {
+                "pack_id": pack_id,
+                "ossie_content": ossie_content,
+                "review_with_steward": review_with_steward,
+            },
+        )
+
+    async def certify_domain_pack(
+        self,
+        pack_id: str,
+        certified_by: str = "domain_steward",
+    ) -> dict[str, Any]:
+        """Marks a registered or auto-induced Domain Pack as steward-certified (`certified=True`)."""
+        return await self._request(
+            "POST",
+            "/v1/domains/packs/certify",
+            {"pack_id": pack_id, "certified_by": certified_by},
+        )
+
 
 # ============================================================================
 # DROP-IN GOOGLE ADK CALLBACKS & EXPLICIT AGENT TOOLS

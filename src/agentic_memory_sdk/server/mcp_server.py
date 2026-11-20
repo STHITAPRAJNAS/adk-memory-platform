@@ -11,6 +11,7 @@ from ..models import (
     ReasoningTraceStep,
     RelationRule,
 )
+from ..ontology_loader import DomainPackLoader
 from ..service import CompositeMemoryService, Event, types
 
 
@@ -24,12 +25,14 @@ class MemoryMcpServerTools:
 
     TOOL_NAMES: list[str] = [
         "recall_context",
+        "check_answerable",
         "commit_episode",
         "ingest_memory",
         "record_decision_trace",
         "register_playbook",
         "register_domain_pack",
         "induce_domain_pack",
+        "certify_domain_pack",
         "register_app_manifest",
         "evolve_app_ontology",
         "run_memory_maintenance",
@@ -88,6 +91,28 @@ class MemoryMcpServerTools:
             "max_hops": max_hops,
             "memories": blocks,
         }
+
+    async def check_answerable(
+        self,
+        app_name: str,
+        user_id: str,
+        query: str,
+        as_of_timestamp: str | None = None,
+        max_hops: int = 2,
+    ) -> dict[str, Any]:
+        """
+        Pre-flight Ontology & 3-Tier Memory Answerability / Coverage Check:
+        Evaluates whether the app's governed TBox (classes, predicates, synonyms) and
+        3-Tier Memory (ABox Graph, Episodic Seeds, Playbooks) cover the concepts in `query`.
+        """
+        return await self.service.check_answerable(
+            app_name=app_name,
+            user_id=user_id,
+            query=query,
+            as_of_iso=as_of_timestamp,
+            max_hops=max_hops,
+            registrar=self.registrar,
+        )
 
     async def commit_episode(
         self,
@@ -187,23 +212,33 @@ class MemoryMcpServerTools:
     async def register_domain_pack(
         self,
         pack_id: str,
-        classes: dict[str, str],
+        classes: dict[str, str] | None = None,
         relations: list[dict[str, Any]] | None = None,
         version: str = "1.0.0",
         review_with_steward: bool = True,
+        sql_ddl: str | None = None,
+        ossie_yaml: str | None = None,
     ) -> dict[str, Any]:
-        """Registers a Layer-1 Federated Domain Pack in the platform catalog via MCP."""
-        rel_map = {}
-        for r in relations or []:
-            rule = RelationRule.model_validate(r)
-            rel_map[rule.predicate] = rule
-        spec = DomainPackSpec(
-            pack_id=pack_id,
-            domain_name=pack_id.split("@")[0],
-            version=version,
-            classes=classes,
-            relations=rel_map,
-        )
+        """
+        Registers a Layer-1 Federated Domain Pack in the platform catalog via MCP
+        from explicit `classes`/`relations`, relational `sql_ddl`, or Apache `ossie_yaml`.
+        """
+        if sql_ddl:
+            spec = DomainPackLoader.from_sql_ddl(pack_id, sql_ddl)
+        elif ossie_yaml:
+            spec = DomainPackLoader.from_ossie_yaml(pack_id, ossie_yaml)
+        else:
+            rel_map = {}
+            for r in relations or []:
+                rule = RelationRule.model_validate(r)
+                rel_map[rule.predicate] = rule
+            spec = DomainPackSpec(
+                pack_id=pack_id,
+                domain_name=pack_id.split("@")[0],
+                version=version,
+                classes=classes or {},
+                relations=rel_map,
+            )
         if review_with_steward:
             refined, audit = self.registrar.review_and_refine_domain_pack(
                 spec, auto_register=True
@@ -212,6 +247,9 @@ class MemoryMcpServerTools:
                 "status": "reviewed_and_registered",
                 "pack_id": refined.pack_id,
                 "classes": refined.classes,
+                "relations": {k: v.model_dump() for k, v in refined.relations.items()},
+                "synonyms": refined.synonyms,
+                "certified": refined.certified,
                 "audit_modifications": audit.modifications_summary,
             }
         self.registrar.register_domain_pack(spec)
@@ -219,6 +257,26 @@ class MemoryMcpServerTools:
             "status": "registered",
             "pack_id": spec.pack_id,
             "classes": spec.classes,
+            "relations": {k: v.model_dump() for k, v in spec.relations.items()},
+            "synonyms": spec.synonyms,
+            "certified": spec.certified,
+        }
+
+    async def certify_domain_pack(
+        self,
+        pack_id: str,
+        certified_by: str = "domain_steward",
+    ) -> dict[str, Any]:
+        """Marks a registered or auto-induced Domain Pack as steward-certified (`certified=True`)."""
+        pack, audit = self.registrar.certify_domain_pack(
+            pack_id=pack_id, certified_by=certified_by
+        )
+        return {
+            "status": "certified",
+            "pack_id": pack.pack_id,
+            "certified": pack.certified,
+            "certified_by": pack.certified_by,
+            "audit_entry": audit.model_dump(),
         }
 
     async def register_app_manifest(
@@ -392,7 +450,7 @@ def create_mcp_server(
         mcp = _MCPServerClass(
             name,
             title="Agentic Composite Memory Platform MCP Server",
-            version="0.1.4",
+            version="0.1.5",
             instructions=(
                 "Enterprise multi-tenant 3-Tier Composite Memory & Stratified Ontology MCP Server. "
                 "Use `recall_context` before answering user queries, `commit_episode` to store turns, "
@@ -424,6 +482,24 @@ def create_mcp_server(
         ),
         structured_output=True,
     )(tools.recall_context)
+
+    mcp.tool(
+        name="check_answerable",
+        title="Pre-Flight Ontology & Memory Coverage Check",
+        description=(
+            "Evaluate whether the governed ontology (TBox classes, predicates, synonyms) and "
+            "3-Tier Memory (Graph ABox, Episodic Seeds, Playbooks) cover the concepts in `query` "
+            "before attempting an answer."
+        ),
+        annotations=_ann(
+            "Pre-Flight Ontology & Memory Coverage Check",
+            read_only=True,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
+    )(tools.check_answerable)
 
     mcp.tool(
         name="commit_episode",
@@ -518,6 +594,20 @@ def create_mcp_server(
         ),
         structured_output=True,
     )(tools.induce_domain_pack)
+
+    mcp.tool(
+        name="certify_domain_pack",
+        title="Certify Layer-1 Domain Pack",
+        description="Mark a registered or auto-induced Domain Pack as steward-certified (`certified=True`).",
+        annotations=_ann(
+            "Certify Layer-1 Domain Pack",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
+    )(tools.certify_domain_pack)
 
     mcp.tool(
         name="register_app_manifest",

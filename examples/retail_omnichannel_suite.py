@@ -387,6 +387,23 @@ async def run_retail_omnichannel_suite() -> dict[str, Any]:
         m.content.parts[0].text for m in historical_recall.memories
     )
 
+    # 8. Steward Certification + Pre-flight Answerability / Coverage Check (`check_answerable`)
+    certified_pack, _ = registrar.certify_domain_pack(
+        "retail_omnichannel@1.0.0", certified_by="retail_chief_architect"
+    )
+    ans_ok = await service.check_answerable(
+        app_name="aurora_retail:returns_concierge_agent",
+        user_id="maya_lin",
+        query="Where is order ORD-9001 shipped from?",
+        registrar=registrar,
+    )
+    ans_gap = await service.check_answerable(
+        app_name="aurora_retail:returns_concierge_agent",
+        user_id="maya_lin",
+        query="What was the return on ad spend for order ORD-9001?",
+        registrar=registrar,
+    )
+
     summary = {
         "pack_id": retail_spec.pack_id,
         "domain_name": retail_spec.domain_name,
@@ -417,6 +434,13 @@ async def run_retail_omnichannel_suite() -> dict[str, Any]:
             "emergent_tiktok_trend_promoted": (
                 "ViralTikTokTrend" in evolution_audit.added_or_modified_classes
                 and "FEATURED_IN_TREND" in evolution_audit.added_or_modified_relations
+            ),
+            "domain_pack_steward_certified": certified_pack.certified is True,
+            "check_answerable_detects_covered_vs_ad_spend_gap": (
+                ans_ok["answerable"] is True
+                and ans_gap["answerable"] is False
+                and ans_gap["status"] == "PARTIAL"
+                and "return on ad spend" in ans_gap["unmatched_concepts"]
             ),
         },
         "playbook_id": pb.playbook_id,

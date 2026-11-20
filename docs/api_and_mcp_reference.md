@@ -18,6 +18,10 @@ Every Data-Plane, Control-Plane, Playbook, and Maintenance capability is accessi
 | **Steward Review & Refine Domain Pack** | `registrar.review_and_refine_domain_pack(pack)` | `POST /v1/domains/packs/review` | Tool: `register_domain_pack(..., review_with_steward=True)` |
 | **Cold-Start Autonomous Domain Induction** | `service.induce_domain_pack(domain_name, transcripts=..., app_name=...)` | `POST /v1/domains/packs/induce` | Tool: `induce_domain_pack` |
 | **Register W3C OWL/SHACL Turtle (`.ttl`)** | `DomainPackLoader.from_turtle_file(...)` | `POST /v1/domains/packs/turtle` | *(Via `register_domain_pack` or REST)* |
+| **Register SQL DDL (`CREATE TABLE`)** | `DomainPackLoader.from_sql_ddl(pack_id, sql_ddl)` | `POST /v1/domains/packs/sql-ddl` | Tool: `register_domain_pack(..., sql_ddl=...)` |
+| **Register Apache Ossie Semantic YAML** | `DomainPackLoader.from_ossie_yaml(pack_id, ossie_yaml)` | `POST /v1/domains/packs/ossie` | Tool: `register_domain_pack(..., ossie_yaml=...)` |
+| **Certify Domain Pack (`certified=True`)** | `registrar.certify_domain_pack(pack_id)` | `POST /v1/domains/packs/certify` | Tool: `certify_domain_pack` |
+| **Pre-Flight Answerability & Coverage** | `service.check_answerable(app_name, user_id, query)` | `POST /v1/memory/check-answerable` | Tool: `check_answerable` |
 | **Onboard / Register Agent App** | `registrar.register_adk_app(manifest)` | `POST /v1/apps/register` (`/v1/apps/onboard`) | Tool: `register_app_manifest` |
 | **Inspect App Compiled TBox** | `registry.resolve_context(tenant, app, user)` | `GET /v1/apps/{tenant_id}/{app_name}` | Tool: `inspect_platform_governance(app_name=...)`<br>Resource: `memory://apps/{tenant_id}/{app_name}/tbox` |
 | **Ingest Turns (Hot-Path or Sleep-Time)** | `service.add_events_to_memory(..., extraction_mode=...)` | `POST /v1/memory/events` | Tool: `commit_episode` / `ingest_memory` |
@@ -297,12 +301,14 @@ Our MCP server (`create_mcp_server` in [`mcp_server.py`](../src/agentic_memory_s
 | Tool Name | Title | `readOnlyHint` | `destructiveHint` | `idempotentHint` | Key Arguments | Purpose |
 | :--- | :--- | :---: | :---: | :---: | :--- | :--- |
 | `recall_context` | 3-Tier Hybrid Memory Recall | `true` | `false` | `true` | `app_name`, `user_id`, `query`, `as_of_timestamp=None`, `max_hops=2` | Recalls Playbooks + RRF Seeds + 2-hop Bi-Temporal Graph + Episodes |
+| `check_answerable` | Pre-Flight Ontology & Memory Coverage Check | `true` | `false` | `true` | `app_name`, `user_id`, `query`, `as_of_timestamp=None`, `max_hops=2` | Evaluates ontology/memory concept coverage (`ANSWERABLE`, `PARTIAL`, `UNANSWERABLE`) |
 | `commit_episode` | Commit Interaction Episode | `false` | `false` | `false` | `app_name`, `user_id`, `raw_payload`, `author="agent"`, `session_id="mcp_session"`, `extraction_mode=None` | Scrubs PII, stores episode, and runs hot-path or sleep-time extraction |
 | `ingest_memory` | Ingest Memory Turn | `false` | `false` | `false` | `app_name`, `user_id`, `text`, `author="user"`, `session_id="mcp_session"`, `extraction_mode=None` | Convenience alias for `commit_episode` using `text` |
 | `record_decision_trace` | Record Procedural Reasoning Trace | `false` | `false` | `true` | `app_name`, `user_id`, `run_id`, `session_id`, `steps` | Writes `AgentRun -> ToolCall -> Entity` procedural graph trace |
 | `register_playbook` | Register or Reinforce Procedural Playbook | `false` | `false` | `true` | `app_name`, `user_id`, `trigger_intent`, `workflow_steps`, `resolution_summary`, `share_in_domain=True` | Codifies or increments `success_count` on a Tier-3 SOP Playbook |
-| `register_domain_pack` | Register Layer-1 Federated Domain Pack | `false` | `false` | `true` | `pack_id`, `classes`, `relations=None`, `version="1.0.0"`, `review_with_steward=True` | Registers (and optionally Steward-reviews) a Layer-1 Domain Pack |
+| `register_domain_pack` | Register Layer-1 Federated Domain Pack | `false` | `false` | `true` | `pack_id`, `classes=None`, `relations=None`, `sql_ddl=None`, `ossie_yaml=None`, `review_with_steward=True` | Registers a Layer-1 Domain Pack from JSON, SQL DDL, or Apache Ossie YAML |
 | `induce_domain_pack` | Cold-Start Autonomous Domain Pack Induction | `false` | `false` | `true` | `domain_name`, `transcripts=None`, `app_name=None`, `min_support_count=1`, `min_confidence=0.70`, `auto_register=True` | Induces & registers a Layer-1 Domain Pack from raw transcripts or stored app episodes |
+| `certify_domain_pack` | Certify Layer-1 Domain Pack | `false` | `false` | `true` | `pack_id`, `certified_by="domain_steward"` | Marks a Domain Pack as steward-certified (`certified=True`) in the audit log |
 | `register_app_manifest` | Register Agent App Governance Manifest | `false` | `false` | `true` | `tenant_id`, `app_name`, `governance_tier="DOMAIN_SHARED"`, `subscribed_domain_packs=None` | Onboards an agent app and compiles its `CompiledTBox` |
 | `evolve_app_ontology` | Evolve App Ontology from Overflow | `false` | `false` | `true` | `app_name`, `min_confidence_to_promote=0.75`, `min_support_count=1` | Canonicalizes & promotes overflow candidates meeting confidence and support thresholds |
 | `run_memory_maintenance` | Run Sleep-Time Memory Maintenance | `false` | `false` | `true` | `min_episodes_to_compact=4`, `min_overflow_confidence=0.55` | Runs batch extraction, session compaction, pruning & dossier synthesis |

@@ -983,6 +983,41 @@ class PlatformOntologyRegistrar:
                 )
             )
 
+    def certify_domain_pack(
+        self,
+        pack_id: str,
+        certified_by: str = "domain_steward",
+        tenant_id: str = "platform",
+    ) -> tuple[DomainPackSpec, OntologyAuditLogEntry]:
+        """
+        Marks a registered (or auto-induced draft) Domain Pack as steward-certified (`certified=True`),
+        recording an immutable `CERTIFY_DOMAIN_PACK` entry in the ontology provenance audit log.
+        """
+        pack = self._domain_packs.get(pack_id) or self._domain_packs.get(
+            pack_id.split("@")[0]
+        )
+        if pack is None:
+            raise ValueError(f"Domain pack '{pack_id}' is not registered.")
+        pack.certified = True
+        pack.certified_by = certified_by
+        audit = OntologyAuditLogEntry(
+            tenant_id=tenant_id,
+            target_id=pack.pack_id,
+            action="CERTIFY_DOMAIN_PACK",
+            previous_version=pack.version,
+            new_version=pack.version,
+            added_or_modified_classes=dict(pack.classes),
+            added_or_modified_relations={
+                k: v.model_dump() for k, v in pack.relations.items()
+            },
+            modifications_summary=[
+                f"Domain pack '{pack.pack_id}' certified by '{certified_by}'"
+            ],
+            triggered_by=certified_by,
+        )
+        self.audit_log.append(audit)
+        return pack, audit
+
     def compile_manifest(self, manifest: AppMemoryManifest) -> tuple[list[str], str, CompiledTBox]:
         """Computes read/write namespaces and merges Layer 0 + Layer 1 + Layer 2 TBox rules."""
         app_ns = f"app:{manifest.tenant_id}:{manifest.app_name}"

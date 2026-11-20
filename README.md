@@ -163,8 +163,11 @@ adk-memory serve-mcp --mode in_memory
 | Platform Capability | In-Process SDK (`CompositeMemoryService` / `Registrar`) | FastAPI REST (`api.py`) & `RemoteCompositeMemoryService` | MCP Server Tool / Resource (`mcp_server.py`) |
 | :--- | :--- | :--- | :--- |
 | **Health & Governance Inspection** | `service.circuit_breaker`, `registry.resolve_context` | `GET /health`, `GET /healthz`, `GET /v1/apps/{tenant}/{app}` | Tool: `inspect_platform_governance`<br>Resource: `memory://governance/health` |
-| **List / Register Domain Pack** | `registrar.register_domain_pack(pack)` | `GET /v1/domains/packs`, `POST /v1/domains/packs`, `POST /v1/domains/packs/review`, `POST /v1/domains/packs/turtle` | Tool: `register_domain_pack`<br>Resource: `memory://domains/packs` |
+| **List / Register Domain Pack (JSON, `.ttl`, SQL DDL, Ossie YAML)** | `registrar.register_domain_pack`, `DomainPackLoader.from_sql_ddl` / `from_ossie_yaml` | `GET /v1/domains/packs`, `POST /v1/domains/packs`, `POST /v1/domains/packs/turtle`, `POST /v1/domains/packs/sql-ddl`, `POST /v1/domains/packs/ossie` | Tool: `register_domain_pack`<br>Resource: `memory://domains/packs` |
+| **Cold-Start Autonomous Domain Induction** | `service.induce_domain_pack(...)` | `POST /v1/domains/packs/induce` | Tool: `induce_domain_pack` |
+| **Certify Domain Pack (`certified=True`)** | `registrar.certify_domain_pack(pack_id)` | `POST /v1/domains/packs/certify` | Tool: `certify_domain_pack` |
 | **Onboard / Inspect Agent App** | `registrar.register_adk_app(manifest)` | `POST /v1/apps/register`, `GET /v1/apps/{tenant}/{app}` | Tool: `register_app_manifest`<br>Resource: `memory://apps/{tenant_id}/{app_name}/tbox` |
+| **Pre-Flight Answerability & Coverage** | `service.check_answerable(app_name, user_id, query)` | `POST /v1/memory/check-answerable` | Tool: `check_answerable` (`readOnlyHint=true`) |
 | **Ingest Turns (Hot-Path or Sleep-Time)** | `service.add_events_to_memory(..., extraction_mode=...)` | `POST /v1/memory/events` | Tool: `commit_episode` / `ingest_memory` |
 | **3-Tier Hybrid Recall + Point-in-Time** | `service.search_memory(..., as_of_iso=..., max_hops=2)` | `POST /v1/memory/search` | Tool: `recall_context`<br>Prompt: `memory_grounded_assistant` |
 | **Record Tier-3 Reasoning Trace** | `service.record_decision_trace(...)` | `POST /v1/traces` | Tool: `record_decision_trace` |

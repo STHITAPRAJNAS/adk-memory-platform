@@ -5,6 +5,19 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-11-20
+
+### Added
+- **Pre-Flight Ontology & 3-Tier Memory Answerability / Coverage Check (`check_answerable`)**:
+  - Evaluates whether an app's governed `CompiledTBox` (classes, predicates, synonyms) and 3-Tier Memory (Bi-Temporal Graph ABox, Episodic Seed Store, and Procedural Playbooks) cover every domain concept and entity in a user query before the agent attempts an answer.
+  - Returns `answerable` (`bool`), `status` (`"ANSWERABLE"` | `"PARTIAL"` | `"UNANSWERABLE"`), `coverage_score` (`0.0–1.0`), `covered_concepts`, `unmatched_concepts`, `matched_tbox_classes`, `matched_entities`, `evidence_counts`, and an actionable `clarification_hint`.
+  - Exposed across Python SDK (`service.check_answerable`), FastAPI REST (`POST /v1/memory/check-answerable`, `RemoteCompositeMemoryService.check_answerable`), and MCP Server (`check_answerable` read-only tool).
+- **Relational SQL DDL & Apache Ossie Semantic Model Loaders (`DomainPackLoader`)**:
+  - `DomainPackLoader.from_sql_ddl` & `POST /v1/domains/packs/sql-ddl`: compiles `CREATE TABLE` schemas, inline/table/ALTER foreign keys, and many-to-many bridge/junction tables into a Layer-1 `DomainPackSpec`.
+  - `DomainPackLoader.from_ossie_yaml` & `POST /v1/domains/packs/ossie`: compiles Apache Ossie / BI Semantic Model YAML or JSON (`terms`, `synonyms`, `relationships`, `sql_attributes`) into a Layer-1 `DomainPackSpec`.
+- **Steward Domain Pack Certification (`certify_domain_pack`)**:
+  - Added `certified` (`bool`), `certified_by`, and `synonyms` to `DomainPackSpec`, and exposed `registrar.certify_domain_pack`, `POST /v1/domains/packs/certify`, and MCP `certify_domain_pack` (expanding the MCP Server to **14 annotated tools**, **4 resources**, and **2 prompts**).
+
 ## [0.1.4] - 2026-11-20
 
 ### Added

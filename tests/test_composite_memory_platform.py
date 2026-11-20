@@ -1538,8 +1538,10 @@ async def test_latest_mcp_protocol_2026_07_28_and_2025_11_25_streamable_http():
         assert meta_resp.status_code == 200
         meta_json = meta_resp.json()
         assert meta_json["protocol_version"] == "2026-07-28"
-        assert len(meta_json["tools"]) == 12
+        assert len(meta_json["tools"]) == 14
         assert "induce_domain_pack" in meta_json["tools"]
+        assert "check_answerable" in meta_json["tools"]
+        assert "certify_domain_pack" in meta_json["tools"]
         assert len(meta_json["resources"]) == 4
         assert len(meta_json["prompts"]) == 2
 
@@ -1554,7 +1556,7 @@ async def test_latest_mcp_protocol_2026_07_28_and_2025_11_25_streamable_http():
         )
         assert r_tools.status_code == 200
         tools_list = r_tools.json()["result"]["tools"]
-        assert len(tools_list) == 12
+        assert len(tools_list) == 14
         by_name = {t["name"]: t for t in tools_list}
         assert by_name["recall_context"]["annotations"]["readOnlyHint"] is True
         assert by_name["recall_context"]["annotations"]["destructiveHint"] is False
@@ -1807,6 +1809,214 @@ async def test_autonomous_ontology_induction_canonicalization_and_empirical_card
         mcp_pack = mcp_induce.json()["result"]["pack"]
         assert "IncidentEvent" in mcp_pack["classes"]
         assert "MITIGATED_BY" in mcp_pack["relations"]
+
+
+@pytest.mark.asyncio
+async def test_sql_ddl_ossie_yaml_check_answerable_and_steward_certification():
+    """
+    Verifies the 3 lightweight capabilities inspired by NVIDIA Auto-Ontology:
+      1. `DomainPackLoader.from_sql_ddl()` and `POST /v1/domains/packs/sql-ddl`:
+         Parses relational `CREATE TABLE` DDL, foreign keys, and bridge tables into
+         a Layer-1 `DomainPackSpec` anchored under Layer 0 Upper Ontology.
+      2. `DomainPackLoader.from_ossie_yaml()` and `POST /v1/domains/packs/ossie`:
+         Parses Apache Ossie / BI Semantic Model YAML (`terms`, `synonyms`, `relationships`,
+         `sql_attributes`) into a Layer-1 `DomainPackSpec`.
+      3. `check_answerable()` across SDK, FastAPI (`POST /v1/memory/check-answerable`),
+         `RemoteCompositeMemoryService`, and MCP (`check_answerable`):
+         Accurately distinguishes `ANSWERABLE` (coverage=1.0), `PARTIAL` (e.g., order covered
+         but "ad spend" missing from ontology and memory), and `UNANSWERABLE` (coverage=0.0).
+      4. Steward Certification (`certify_domain_pack`) across SDK, FastAPI, and MCP.
+    """
+    # 1. Test `DomainPackLoader.from_sql_ddl` directly
+    sample_ddl = """
+    CREATE TABLE sales.customers (
+        customer_id TEXT PRIMARY KEY,
+        full_name TEXT NOT NULL
+    );
+    CREATE TABLE warehouse.fulfillment_centers (
+        fc_id TEXT PRIMARY KEY,
+        region_code TEXT NOT NULL
+    );
+    CREATE TABLE warehouse.stock_items (
+        sku_id TEXT PRIMARY KEY,
+        item_name TEXT NOT NULL
+    );
+    CREATE TABLE sales.customer_orders (
+        order_id TEXT PRIMARY KEY,
+        customer_id TEXT REFERENCES sales.customers(customer_id),
+        primary_fc_id TEXT REFERENCES warehouse.fulfillment_centers(fc_id)
+    );
+    CREATE TABLE sales.order_lines (
+        line_id TEXT PRIMARY KEY,
+        FOREIGN KEY (order_id) REFERENCES sales.customer_orders(order_id),
+        FOREIGN KEY (sku_id) REFERENCES warehouse.stock_items(sku_id)
+    );
+    """
+    sql_pack = DomainPackLoader.from_sql_ddl("wwi_sales@1.0.0", sample_ddl)
+    assert sql_pack.classes["Customer"] == "p:Actor"
+    assert sql_pack.classes["CustomerOrder"] == "p:Event"
+    assert sql_pack.classes["FulfillmentCenter"] == "p:Object"
+    assert sql_pack.classes["StockItem"] == "p:Object"
+    assert sql_pack.relations["HAS_CUSTOMER"].domain_class == "CustomerOrder"
+    assert sql_pack.relations["HAS_CUSTOMER"].range_class == "Customer"
+    assert sql_pack.relations["HAS_CUSTOMER"].is_functional is True
+    assert sql_pack.relations["HAS_PRIMARY_FC"].is_functional is True
+    # Bridge table `order_lines` synthesizes `INCLUDES_STOCK_ITEM` (many-to-many -> is_functional=False)
+    assert "INCLUDES_STOCK_ITEM" in sql_pack.relations
+    assert sql_pack.relations["INCLUDES_STOCK_ITEM"].is_functional is False
+
+    # 2. Test `DomainPackLoader.from_ossie_yaml` directly
+    sample_ossie_yaml = """
+terms:
+  - name: CustomerOrder
+    synonyms: [purchase_order, invoice, sales_order]
+  - name: FulfillmentCenter
+    synonyms: [warehouse, depot]
+  - name: LoyaltyTier
+    synonyms: [membership_level, vip_tier]
+relationships:
+  - name: SHIPPED_FROM_PRIMARY
+    source: CustomerOrder
+    target: FulfillmentCenter
+    cardinality: many_to_one
+  - name: ENROLLED_IN_TIER
+    source: RetailCustomer
+    target: LoyaltyTier
+    cardinality: many_to_one
+"""
+    ossie_pack = DomainPackLoader.from_ossie_yaml(
+        "retail_ossie@1.0.0", sample_ossie_yaml
+    )
+    assert "CustomerOrder" in ossie_pack.classes
+    assert "RetailCustomer" in ossie_pack.classes
+    assert "purchase_order" in ossie_pack.synonyms["CustomerOrder"]
+    assert ossie_pack.relations["SHIPPED_FROM_PRIMARY"].is_functional is True
+    assert ossie_pack.relations["ENROLLED_IN_TIER"].is_functional is True
+
+    # 3. End-to-End FastAPI + RemoteClient + MCP test for SQL DDL, Ossie, Certification & `check_answerable`
+    store = InMemoryUnifiedAdapter()
+    extractor = RuleBasedMockExtractorAdapter()
+    service = CompositeMemoryService(
+        registry_adapter=store,
+        seed_store_adapter=store,
+        graph_adapter=store,
+        embedding_adapter=DeterministicHashEmbeddingAdapter(),
+        extractor_adapter=extractor,
+    )
+    registrar = PlatformOntologyRegistrar(store)
+    app = create_memory_platform_app(
+        service=service, registrar=registrar, enable_outbox_worker=False
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1",
+    ) as client:
+        remote_client = RemoteCompositeMemoryService(
+            base_url="http://127.0.0.1", http_client=client
+        )
+
+        # Register via REST `/v1/domains/packs/sql-ddl` & `/v1/domains/packs/ossie`
+        ddl_resp = await remote_client.register_domain_pack_from_sql_ddl(
+            "wwi_sales@1.0.0", sample_ddl
+        )
+        assert ddl_resp["status"] == "reviewed_and_registered"
+
+        ossie_resp = await remote_client.register_domain_pack_from_ossie(
+            "retail_ossie@1.0.0", sample_ossie_yaml
+        )
+        assert ossie_resp["status"] == "reviewed_and_registered"
+        assert ossie_resp["certified"] is False
+
+        # Certify `retail_ossie@1.0.0` via REST `/v1/domains/packs/certify`
+        cert_resp = await remote_client.certify_domain_pack(
+            "retail_ossie@1.0.0", certified_by="chief_data_steward"
+        )
+        assert cert_resp["status"] == "certified"
+        assert cert_resp["certified"] is True
+        assert cert_resp["certified_by"] == "chief_data_steward"
+
+        # Onboard app subscribed to `retail_ossie@1.0.0` and ingest order ORD-88410
+        await remote_client.register_manifest(
+            AppMemoryManifest(
+                tenant_id="nordstrom",
+                app_name="analytics_concierge",
+                governance_tier=GovernanceTier.TIER2_DOMAIN_SHARED,
+                subscribed_domain_packs=["retail_ossie@1.0.0"],
+            )
+        )
+        extractor.enqueue(
+            ExtractionPayload(
+                entities=[
+                    ExtractedEntity(
+                        canonical_name="ORD-88410",
+                        entity_class="CustomerOrder",
+                        summary="Order ORD-88410 shipped from FC-Seattle-01",
+                    ),
+                    ExtractedEntity(
+                        canonical_name="FC-Seattle-01",
+                        entity_class="FulfillmentCenter",
+                        summary="Primary Seattle fulfillment center",
+                    ),
+                ],
+                facts=[
+                    ExtractedFact(
+                        source_entity="ORD-88410",
+                        source_class="CustomerOrder",
+                        predicate="SHIPPED_FROM_PRIMARY",
+                        target_entity="FC-Seattle-01",
+                        target_class="FulfillmentCenter",
+                        fact_summary="Order ORD-88410 shipped from FC-Seattle-01",
+                    )
+                ],
+            )
+        )
+        await remote_client.add_events_to_memory(
+            app_name="nordstrom:analytics_concierge",
+            user_id="analyst_maya",
+            events=[_make_event("Order ORD-88410 shipped from FC-Seattle-01.")],
+        )
+
+        # Case A: Fully Answerable Question (100% coverage)
+        ans_full = await remote_client.check_answerable(
+            app_name="nordstrom:analytics_concierge",
+            user_id="analyst_maya",
+            query="Where was order ORD-88410 shipped from?",
+        )
+        assert ans_full["answerable"] is True
+        assert ans_full["status"] == "ANSWERABLE"
+        assert ans_full["coverage_score"] == 1.0
+        assert "ORD-88410" in ans_full["matched_entities"]
+
+        # Case B: Partial Coverage Question (asks about 'ad spend' which is not in the ontology or memory!)
+        ans_partial = await remote_client.check_answerable(
+            app_name="nordstrom:analytics_concierge",
+            user_id="analyst_maya",
+            query="What was the ad spend for order ORD-88410?",
+        )
+        assert ans_partial["answerable"] is False
+        assert ans_partial["status"] == "PARTIAL"
+        assert 0.0 < ans_partial["coverage_score"] < 1.0
+        assert "ad spend" in ans_partial["unmatched_concepts"]
+
+        # Case C: Completely Unanswerable Question (0.0 coverage) via MCP `check_answerable`
+        mcp_unans = await client.post(
+            "/v1/mcp/call",
+            json={
+                "tool_name": "check_answerable",
+                "arguments": {
+                    "app_name": "nordstrom:analytics_concierge",
+                    "user_id": "analyst_maya",
+                    "query": "What is the payroll tax and carbon footprint in Antarctica?",
+                },
+            },
+        )
+        assert mcp_unans.status_code == 200
+        unans_res = mcp_unans.json()["result"]
+        assert unans_res["answerable"] is False
+        assert unans_res["status"] == "UNANSWERABLE"
+        assert unans_res["coverage_score"] == 0.0
+
 
 
 

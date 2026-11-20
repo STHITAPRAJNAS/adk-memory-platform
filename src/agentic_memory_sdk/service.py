@@ -1496,3 +1496,309 @@ class CompositeMemoryService(BaseMemoryService):
             tenant_id=tenant_id,
             auto_register=auto_register,
         )
+
+    async def check_answerable(
+        self,
+        app_name: str,
+        user_id: str,
+        query: str,
+        *,
+        as_of_iso: str | None = None,
+        max_hops: int = 2,
+        registrar: PlatformOntologyRegistrar | None = None,
+    ) -> dict[str, Any]:
+        """
+        Pre-flight Ontology & 3-Tier Memory Answerability / Coverage Check:
+        Evaluates whether the app's governed `CompiledTBox` (classes, predicates, synonyms)
+        and 3-Tier Memory (Bi-Temporal Graph ABox, Episodic Seed Store, and Procedural Playbooks)
+        cover every domain concept and entity in `query` before the agent attempts an answer.
+        """
+        import re
+
+        tenant_id, clean_app = self._split_tenant_app(app_name)
+        ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
+        tbox = ctx.tbox
+        q_vec = await self.embedder.embed(query)
+
+        seeds, episodes, matched_playbooks = await asyncio.gather(
+            self.seed_store.hybrid_seed_search(ctx, query, q_vec, limit=8),
+            self.seed_store.search_episodes(ctx, q_vec, limit=4),
+            self.playbook_adapter.match_playbooks(
+                ctx.tenant_id, ctx.read_namespaces, q_vec
+            ),
+        )
+        graph_facts: list[GraphFactReadResult] = []
+        if seeds and self.circuit_breaker.allow_request():
+            try:
+                graph_facts = await asyncio.wait_for(
+                    self.graph.expand_active_subgraph(
+                        ctx,
+                        [s.vertex_id for s in seeds],
+                        as_of_iso=as_of_iso,
+                        max_hops=max_hops,
+                        limit=25,
+                    ),
+                    timeout=self.graph_timeout_sec,
+                )
+            except Exception:
+                graph_facts = []
+
+        # Build vocabulary from TBox classes, predicates, DomainPack synonyms, and recalled ABox/Episodic evidence
+        upper_defaults = {
+            "p:Actor",
+            "p:Object",
+            "p:Event",
+            "p:Concept",
+            "p:CandidateConcept",
+            "p:UserPreference",
+            "owl:Thing",
+        }
+        domain_classes = [c for c in tbox.classes if c not in upper_defaults]
+
+        tbox_token_to_class: dict[str, str] = {}
+        for cls_name in domain_classes:
+            spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", cls_name).lower()
+            tbox_token_to_class[spaced] = cls_name
+            for w in spaced.split():
+                if len(w) >= 3:
+                    tbox_token_to_class[w] = cls_name
+                    if w.endswith("s") and len(w) > 4:
+                        tbox_token_to_class[w[:-1]] = cls_name
+                    else:
+                        tbox_token_to_class[w + "s"] = cls_name
+
+        if registrar is not None:
+            for pack in registrar._domain_packs.values():
+                for cls_name, syns in pack.synonyms.items():
+                    for syn in syns:
+                        syn_low = syn.lower().strip()
+                        tbox_token_to_class[syn_low] = cls_name
+                        for w in re.split(r"[\s_\-]+", syn_low):
+                            if len(w) >= 3:
+                                tbox_token_to_class[w] = cls_name
+
+        tbox_token_to_pred: dict[str, str] = {}
+        for pred_name in tbox.relations:
+            for w in pred_name.lower().split("_"):
+                if len(w) >= 4 and w not in ("from", "with", "into", "over", "primary"):
+                    tbox_token_to_pred[w] = pred_name
+
+        evidence_blob_parts: list[str] = []
+        matched_entities: list[str] = []
+        for s in seeds:
+            evidence_blob_parts.append(f"{s.canonical_name} {s.entity_class} {s.summary}")
+            if s.canonical_name.lower() in query.lower() and s.canonical_name not in matched_entities:
+                matched_entities.append(s.canonical_name)
+        for gf in graph_facts:
+            evidence_blob_parts.append(
+                f"{gf.source_name} {gf.predicate} {gf.target_name} {gf.fact_summary}"
+            )
+            for ename in (gf.source_name, gf.target_name):
+                if ename.lower() in query.lower() and ename not in matched_entities:
+                    matched_entities.append(ename)
+        for ep in episodes:
+            evidence_blob_parts.append(ep.content_text)
+        for pb in matched_playbooks:
+            evidence_blob_parts.append(
+                f"{pb.trigger_intent} {' '.join(pb.workflow_steps)} {pb.resolution_summary}"
+            )
+        evidence_text_low = " ".join(evidence_blob_parts).lower()
+
+        # Extract candidate concepts & entities from the query
+        q_low = query.lower()
+        extracted_concepts: list[str] = []
+        consumed_spans: list[tuple[int, int]] = []
+
+        # 1. Explicit typed identifiers (ORD-88410, payment-router-01, us-east-1, SKU-9901, etc.)
+        id_regex = re.compile(
+            r"\b(?:[A-Z]{2,5}-[A-Za-z0-9\-]+|(?:us|eu|ap)-(?:east|west|central|south|north)-\d|[a-z0-9]+-(?:service|api|router|gateway|db|cluster|worker)(?:-\d+)?)\b"
+        )
+        for m in id_regex.finditer(query):
+            val = m.group(0)
+            if val not in extracted_concepts:
+                extracted_concepts.append(val)
+            consumed_spans.append((m.start(), m.end()))
+
+        # 2. Multi-word business / technical domain phrases (e.g., 'return on ad spend', 'ad spend', 'loyalty tier')
+        phrase_patterns = [
+            "return on ad spend",
+            "advertising spend",
+            "ad spend",
+            "marketing attribution",
+            "customer acquisition cost",
+            "churn prediction",
+            "payroll tax",
+            "carbon footprint",
+            "loyalty tier",
+            "fulfillment center",
+            "delivery preference",
+            "shipping carrier",
+        ]
+        for ph in phrase_patterns:
+            idx = q_low.find(ph)
+            if idx != -1:
+                if not any(
+                    not (idx + len(ph) <= s or idx >= e) for s, e in consumed_spans
+                ):
+                    extracted_concepts.append(ph)
+                    consumed_spans.append((idx, idx + len(ph)))
+
+        # 3. Remaining content words (excluding stopwords, calendar months, and pure numbers)
+        stopwords = {
+            "what",
+            "was",
+            "were",
+            "for",
+            "the",
+            "and",
+            "or",
+            "in",
+            "on",
+            "at",
+            "to",
+            "from",
+            "by",
+            "with",
+            "of",
+            "is",
+            "are",
+            "be",
+            "been",
+            "how",
+            "where",
+            "when",
+            "who",
+            "which",
+            "why",
+            "did",
+            "does",
+            "do",
+            "can",
+            "could",
+            "would",
+            "should",
+            "tell",
+            "me",
+            "about",
+            "show",
+            "find",
+            "get",
+            "give",
+            "list",
+            "check",
+            "compute",
+            "calculate",
+            "current",
+            "primary",
+            "active",
+            "status",
+            "latest",
+            "recent",
+            "history",
+            "january",
+            "february",
+            "march",
+            "april",
+            "may",
+            "june",
+            "july",
+            "august",
+            "september",
+            "october",
+            "november",
+            "december",
+            "today",
+            "yesterday",
+        }
+        for m in re.finditer(r"\b[A-Za-z][A-Za-z0-9_]{2,}\b", query):
+            if any(not (m.end() <= s or m.start() >= e) for s, e in consumed_spans):
+                continue
+            word = m.group(0)
+            w_low = word.lower()
+            if w_low in stopwords or w_low.isdigit():
+                continue
+            if w_low not in [c.lower() for c in extracted_concepts]:
+                extracted_concepts.append(word)
+
+        covered_concepts: list[str] = []
+        unmatched_concepts: list[str] = []
+        matched_tbox_classes: set[str] = set()
+        matched_tbox_predicates: set[str] = set()
+
+        for concept in extracted_concepts:
+            c_low = concept.lower()
+            in_tbox_cls = tbox_token_to_class.get(c_low)
+            in_tbox_pred = tbox_token_to_pred.get(c_low)
+            content_toks = [
+                tok
+                for tok in re.split(r"[\s_\-]+", c_low)
+                if len(tok) >= 2 and tok not in stopwords
+            ]
+            if not in_tbox_cls and content_toks and all(
+                tok in tbox_token_to_class for tok in content_toks
+            ):
+                in_tbox_cls = tbox_token_to_class[content_toks[-1]]
+            if not in_tbox_pred and content_toks and all(
+                tok in tbox_token_to_pred for tok in content_toks
+            ):
+                in_tbox_pred = tbox_token_to_pred[content_toks[-1]]
+
+            in_evidence = c_low in evidence_text_low
+            if in_tbox_cls:
+                matched_tbox_classes.add(in_tbox_cls)
+            if in_tbox_pred:
+                matched_tbox_predicates.add(in_tbox_pred)
+
+            if in_tbox_cls or in_tbox_pred or in_evidence:
+                covered_concepts.append(concept)
+            else:
+                unmatched_concepts.append(concept)
+
+        total_concepts = len(covered_concepts) + len(unmatched_concepts)
+        has_any_evidence = bool(
+            graph_facts or episodes or matched_playbooks or matched_entities
+        )
+        if total_concepts == 0:
+            coverage_score = 1.0 if has_any_evidence else 0.0
+        else:
+            coverage_score = round(len(covered_concepts) / total_concepts, 2)
+
+        if coverage_score >= 0.75 and not unmatched_concepts and has_any_evidence:
+            status = "ANSWERABLE"
+            answerable = True
+            clarification_hint = (
+                f"Query is fully covered by ontology and memory (coverage={coverage_score:.2f})."
+            )
+        elif coverage_score > 0.0 and (covered_concepts or has_any_evidence):
+            status = "PARTIAL"
+            answerable = False
+            clarification_hint = (
+                f"Partial coverage ({coverage_score:.2f}): ontology and memory cover {covered_concepts}, "
+                f"but no ontology term or memory record covers {unmatched_concepts}. "
+                "Ask the user to clarify or connect a Domain Pack for the missing concepts."
+            )
+        else:
+            status = "UNANSWERABLE"
+            answerable = False
+            clarification_hint = (
+                f"Unanswerable from current ontology and memory (coverage=0.00): "
+                f"no ontology terms or stored memories match {unmatched_concepts or [query]}."
+            )
+
+        return {
+            "query": query,
+            "answerable": answerable,
+            "status": status,
+            "coverage_score": coverage_score,
+            "covered_concepts": covered_concepts,
+            "unmatched_concepts": unmatched_concepts,
+            "matched_tbox_classes": sorted(matched_tbox_classes),
+            "matched_tbox_predicates": sorted(matched_tbox_predicates),
+            "matched_entities": matched_entities,
+            "evidence_counts": {
+                "graph_facts": len(graph_facts),
+                "episodic_records": len(episodes),
+                "playbooks": len(matched_playbooks),
+            },
+            "clarification_hint": clarification_hint,
+        }
