@@ -138,7 +138,7 @@ class PlaybookStoreAdapter(Protocol):
         tenant_id: str,
         read_namespaces: list[str],
         query_embedding: list[float],
-        similarity_threshold: float = 0.85,
+        similarity_threshold: float = 0.65,
         limit: int = 2,
     ) -> list[PlaybookRecord]: ...
 
