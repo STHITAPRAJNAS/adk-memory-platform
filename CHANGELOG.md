@@ -5,6 +5,20 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-11-20
+
+### Added
+- **Cold-Start Autonomous Ontology Induction Engine (`induce_domain_pack`)**:
+  - Synthesizes a complete Layer-1 `DomainPackSpec` (canonicalized `PascalCase` singular classes anchored under Layer 0 Upper Ontology, `UPPER_SNAKE_CASE` domain/range relations, and empirical + lexical `is_functional` / `is_transitive` rules) from sample conversation transcripts or stored app episodes.
+  - Exposed across Python SDK (`service.induce_domain_pack`, `registrar.induce_domain_pack_from_payloads`), FastAPI REST (`POST /v1/domains/packs/induce`, `RemoteCompositeMemoryService.induce_domain_pack`), and MCP Server (`induce_domain_pack` — 12th annotated MCP tool).
+- **Multi-Occurrence Support Gating (`min_support_count`), Canonicalization & Empirical ABox Cardinality**:
+  - Added `PlatformOntologyRegistrar.canonicalize_class_name` and `canonicalize_predicate_name` to merge plural/casing variants (`ColdChainShipments` / `cold_chain_shipment` -> `ColdChainShipment`) and pool support counts before overflow promotion.
+  - Added `min_support_count` parameter to `evolve_app_ontology_from_overflow`, `POST /v1/ontology/evolve`, and MCP `evolve_app_ontology` to prevent single-occurrence hallucinations from mutating the governed TBox.
+  - Upgraded `infer_upper_concept_parent` with head-noun-aware multi-domain semantic alignment (Retail, Supply Chain, Healthcare, Finance, SRE, SecOps, CRM) and upgraded `infer_relation_flags` with empirical `(source_id, target_id)` graph cardinality analysis.
+  - Updated `build_tbox_system_instruction` across Gemini, Bedrock, OpenAI/vLLM, and Ollama extractors to instruct models to emit descriptive `PascalCase` classes and `UPPER_SNAKE_CASE` predicates when `allow_emergent_overflow=True`.
+- **Enterprise Best Practices Guide**:
+  - Added [`docs/best_practices_guide.md`](docs/best_practices_guide.md) covering consumption pattern selection, database topology tuning, functional vs. multi-valued relation modeling, Hot-Path vs. Sleep-Time extraction, and the Production Go-Live Checklist.
+
 ## [0.1.3] - 2026-11-14
 
 ### Added
