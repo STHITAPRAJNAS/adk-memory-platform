@@ -5,6 +5,18 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-11-21
+
+### Added
+- **LangGraph & LangChain First-Class Memory Adapters (`agentic_composite_memory.langgraph_integration`)**:
+  - `LangGraphCompositeMemoryStore`: Drop-in `langgraph.store.base.BaseStore` implementation (`aput`, `aget`, `asearch`, `adelete`, `alist_namespaces`, `abatch`, `batch`) backed by either in-process `CompositeMemoryService` or stateless `RemoteCompositeMemoryService`.
+  - `create_langgraph_memory_nodes`: Pre-built `StateGraph` nodes (`recall_node`, `check_answerable_node`, `commit_node` with automatic extraction of `AIMessage.tool_calls` into Tier-3 Procedural Reasoning Traces).
+  - `get_langgraph_memory_tools`: 5 ready-to-bind LangGraph ReAct / `ToolNode` tools (`recall_memory_context`, `check_memory_answerable`, `commit_memory_episode`, `register_memory_playbook`, `record_memory_decision_trace`).
+  - `CompositeMemoryChatMessageHistory`: LangChain `BaseChatMessageHistory` implementation for `RunnableWithMessageHistory`.
+  - Added optional `[langgraph]` extra (`pip install "agentic-composite-memory[langgraph]"`).
+- **Domain Pack Authoring & Ontology Engineering Guide (`docs/domain_pack_authoring_guide.md`)**:
+  - Comprehensive guide covering all 6 ways to create a Layer-1 Domain Pack (JSON/YAML, Python Pydantic, W3C OWL 2 / SHACL `.ttl`, Relational SQL DDL, Apache Ossie YAML, and Cold-Start Autonomous Transcript Induction) with complete blueprints for **Omnichannel Retail & Supply Chain** and **Payment Transaction Processing, Clearing & Dispute Resolution**.
+
 ## [0.1.5] - 2026-11-20
 
 ### Added

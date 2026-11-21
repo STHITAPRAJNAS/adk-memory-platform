@@ -11,6 +11,7 @@ An enterprise-grade, **domain-agnostic**, multi-tenant **Composite Memory SDK, F
 ## Documentation Hub (`docs/`)
 
 - **[Documentation Index](./docs/README.md)**
+- **[Domain Pack Authoring & Ontology Engineering Guide (6 Creation Methods + Retail & Payment Processing Blueprints)](./docs/domain_pack_authoring_guide.md)**
 - **[Enterprise Best Practices & Production Go-Live Guide](./docs/best_practices_guide.md)**
 - **[Architecture, 3-Layer Ontology & 3-Tier Context Graph Guide](./docs/architecture_and_ontology_guide.md)**
 - **[Real-World Usage, Retail/SRE Domain Suites & The 3 Agent Consumption Patterns (SDK, FastAPI, MCP)](./docs/real_world_usage_and_recipes.md)**

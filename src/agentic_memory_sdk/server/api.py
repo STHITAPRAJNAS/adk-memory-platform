@@ -175,7 +175,7 @@ def create_memory_platform_app(
 
     app = FastAPI(
         title="ADK Enterprise Composite Memory Platform API",
-        version="0.1.5",
+        version="0.1.6",
         description=(
             "Domain-Agnostic Multi-Tenant Memory Service combining Episodic Memory, "
             "Stratified Ontology (TBox), Bi-Temporal Graph KB (ABox), and Reasoning Traces."

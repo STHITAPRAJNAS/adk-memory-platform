@@ -450,7 +450,7 @@ def create_mcp_server(
         mcp = _MCPServerClass(
             name,
             title="Agentic Composite Memory Platform MCP Server",
-            version="0.1.5",
+            version="0.1.6",
             instructions=(
                 "Enterprise multi-tenant 3-Tier Composite Memory & Stratified Ontology MCP Server. "
                 "Use `recall_context` before answering user queries, `commit_episode` to store turns, "
