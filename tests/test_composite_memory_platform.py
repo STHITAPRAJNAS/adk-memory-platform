@@ -2018,6 +2018,200 @@ relationships:
         assert unans_res["coverage_score"] == 0.0
 
 
+@pytest.mark.asyncio
+async def test_langgraph_base_store_stategraph_nodes_tools_and_chat_history():
+    """
+    Verifies all 4 LangGraph & LangChain integration adapters in `langgraph_integration.py`
+    (reachable via both `agentic_composite_memory` and `agentic_memory_sdk`):
+      1. `LangGraphCompositeMemoryStore` (`BaseStore` interface: `aput`, `aget`, `asearch`,
+         `adelete`, `alist_namespaces`, `abatch`).
+      2. `create_langgraph_memory_nodes` (`recall_node`, `check_answerable_node`, `commit_node`
+         with automatic tool-call reasoning trace extraction).
+      3. `get_langgraph_memory_tools` (`recall_memory_context`, `check_memory_answerable`,
+         `commit_memory_episode`, `register_memory_playbook`, `record_memory_decision_trace`).
+      4. `CompositeMemoryChatMessageHistory` (`aadd_messages`, `aget_messages`, `aclear`).
+    """
+    from agentic_composite_memory import (
+        CompositeMemoryChatMessageHistory,
+        LangGraphCompositeMemoryStore,
+        create_langgraph_memory_nodes,
+        get_langgraph_memory_tools,
+    )
+    from agentic_composite_memory.langgraph_integration import AIMessage, HumanMessage
+
+    store = InMemoryUnifiedAdapter()
+    extractor = RuleBasedMockExtractorAdapter()
+    service = CompositeMemoryService(
+        registry_adapter=store,
+        seed_store_adapter=store,
+        graph_adapter=store,
+        embedding_adapter=DeterministicHashEmbeddingAdapter(),
+        extractor_adapter=extractor,
+    )
+    registrar = PlatformOntologyRegistrar(store)
+    await registrar. induce_domain_pack_from_payloads if False else None
+    _, _, _ = await service.induce_domain_pack(
+        domain_name="sre_lg",
+        transcripts=[
+            "Microservice payment-router-01 deployed in us-east-1 and depends on ledger-db-01."
+        ],
+        auto_register=True,
+        registrar=registrar,
+    )
+    await registrar.register_adk_app(
+        AppMemoryManifest(
+            tenant_id="acme",
+            app_name="langgraph_sre",
+            governance_tier=GovernanceTier.TIER2_DOMAIN_SHARED,
+            subscribed_domain_packs=["sre_lg@1.0.0"],
+        )
+    )
+
+    # 1. Test `LangGraphCompositeMemoryStore` (`aput`, `aget`, `asearch`, `alist_namespaces`)
+    lg_store = LangGraphCompositeMemoryStore(
+        service,
+        default_app_name="acme:langgraph_sre",
+        default_user_id="alice_sre",
+    )
+    extractor.enqueue(
+        ExtractionPayload(
+            entities=[
+                ExtractedEntity(
+                    canonical_name="payment-router-01",
+                    entity_class="Microservice",
+                    summary="Core payment router service",
+                ),
+                ExtractedEntity(
+                    canonical_name="us-east-1",
+                    entity_class="CloudRegion",
+                    summary="AWS US East region",
+                ),
+            ],
+            facts=[
+                ExtractedFact(
+                    source_entity="payment-router-01",
+                    source_class="Microservice",
+                    predicate="DEPLOYED_IN",
+                    target_entity="us-east-1",
+                    target_class="CloudRegion",
+                    fact_summary="payment-router-01 deployed in us-east-1",
+                )
+            ],
+        )
+    )
+    ns = ("acme:langgraph_sre", "alice_sre", "memories")
+    await lg_store.aput(
+        ns,
+        "mem_1",
+        {"text": "payment-router-01 is deployed in us-east-1."},
+    )
+    fetched_item = await lg_store.aget(ns, "mem_1")
+    assert fetched_item is not None
+    assert fetched_item.value["text"] == "payment-router-01 is deployed in us-east-1."
+
+    namespaces = await lg_store.alist_namespaces(prefix=("acme:langgraph_sre",))
+    assert ns in namespaces
+
+    search_hits = await lg_store.asearch(
+        ("acme:langgraph_sre", "alice_sre"),
+        query="Where is payment-router-01 deployed?",
+    )
+    assert len(search_hits) >= 1
+    assert any("payment-router-01" in h.value["text"] for h in search_hits)
+
+    # 2. Test `create_langgraph_memory_nodes` (`recall_node`, `check_answerable_node`, `commit_node`)
+    nodes = create_langgraph_memory_nodes(
+        service,
+        default_app_name="acme:langgraph_sre",
+        default_user_id="alice_sre",
+        inject_system_message=True,
+    )
+    initial_state = {
+        "messages": [
+            HumanMessage(content="Where is payment-router-01 deployed?"),
+        ]
+    }
+    cfg = {"configurable": {"thread_id": "lg_thread_42", "user_id": "alice_sre"}}
+
+    ans_update = await nodes.check_answerable_node(initial_state, cfg)
+    assert ans_update["answerability"]["answerable"] is True
+
+    recall_update = await nodes.recall_node(initial_state, cfg)
+    assert "payment-router-01" in recall_update["memory_context"]
+    assert len(recall_update["messages"]) == 2  # Injected SystemMessage + HumanMessage
+
+    # Simulate an AI response with tool_calls and run `commit_node`
+    post_turn_state = {
+        "messages": [
+            HumanMessage(content="Fail over payment-router-01 to us-west-2."),
+            {
+                "role": "ai",
+                "content": "Failing over payment-router-01 to us-west-2 now.",
+                "tool_calls": [
+                    {
+                        "name": "trigger_region_failover",
+                        "args": {"service": "payment-router-01", "target": "us-west-2"},
+                    }
+                ],
+            },
+        ]
+    }
+    commit_update = await nodes.commit_node(post_turn_state, cfg)
+    assert commit_update["memory_committed_events"] == 2
+    assert commit_update["memory_recorded_traces"] == 1
+
+    # 3. Test `get_langgraph_memory_tools` (`recall_memory_context`, `register_memory_playbook`, etc.)
+    lg_tools = {
+        t.name: t
+        for t in get_langgraph_memory_tools(
+            service,
+            default_app_name="acme:langgraph_sre",
+            default_user_id="alice_sre",
+        )
+    }
+    assert set(lg_tools.keys()) == {
+        "recall_memory_context",
+        "check_memory_answerable",
+        "commit_memory_episode",
+        "register_memory_playbook",
+        "record_memory_decision_trace",
+    }
+    pb_res = await lg_tools["register_memory_playbook"].ainvoke(
+        {
+            "trigger_intent": "payment-router-01 latency failover",
+            "workflow_steps": ["drain_us_east_1", "shift_traffic_us_west_2"],
+            "resolution_summary": "Automated LangGraph SRE region failover SOP",
+        }
+    )
+    assert pb_res["status"] == "registered"
+
+    recall_tool_res = await lg_tools["recall_memory_context"].ainvoke(
+        {"query": "payment-router-01 latency failover"}
+    )
+    assert any(
+        "shift_traffic_us_west_2" in m["text"] for m in recall_tool_res["memories"]
+    )
+
+    # 4. Test `CompositeMemoryChatMessageHistory`
+    history = CompositeMemoryChatMessageHistory(
+        service,
+        app_name="acme:langgraph_sre",
+        user_id="alice_sre",
+        session_id="chat_hist_1",
+    )
+    await history.aadd_messages(
+        [
+            HumanMessage(content="Check payment-router-01 status."),
+            AIMessage(content="payment-router-01 is healthy."),
+        ]
+    )
+    msgs = await history.aget_messages()
+    assert len(msgs) == 2
+    await history.aclear()
+    assert len(history.messages) == 0
+
+
+
 
 
 

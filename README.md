@@ -113,7 +113,7 @@ service = CompositeMemoryService.from_postgres_stack(
 )
 ```
 
-### Pattern 2: Co-Hosted FastAPI Service + `RemoteCompositeMemoryService`
+### Pattern 2: Co-Hosted FastAPI Service + `RemoteCompositeMemoryService` (Google ADK)
 ```python
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
@@ -135,7 +135,39 @@ agent = LlmAgent(
 runner = Runner(app_name="nordstrom_global:order_concierge", agent=agent, memory_service=remote_memory)
 ```
 
-### Pattern 3: Model Context Protocol (MCP `2026-07-28` & `2025-11-25` Server)
+### Pattern 3: LangGraph & LangChain Integration (`BaseStore`, `StateGraph` Nodes & Tools)
+```python
+from agentic_composite_memory import (
+    LangGraphCompositeMemoryStore,
+    RemoteCompositeMemoryService,
+    create_langgraph_memory_nodes,
+    get_langgraph_memory_tools,
+)
+
+remote_memory = RemoteCompositeMemoryService(base_url="http://memory-platform:8095")
+
+# A) Drop-in LangGraph BaseStore: builder.compile(store=lg_store)
+lg_store = LangGraphCompositeMemoryStore(
+    remote_memory,
+    default_app_name="nordstrom_global:order_concierge",
+    default_user_id="shopper_maya_lin",
+)
+
+# B) Pre-built StateGraph Nodes (recall_node, check_answerable_node, commit_node)
+nodes = create_langgraph_memory_nodes(
+    remote_memory,
+    default_app_name="nordstrom_global:order_concierge",
+    inject_system_message=True,
+)
+
+# C) LangGraph ReAct / ToolNode Tools (StructuredTool compatible)
+tools = get_langgraph_memory_tools(
+    remote_memory,
+    default_app_name="nordstrom_global:order_concierge",
+)
+```
+
+### Pattern 4: Model Context Protocol (MCP `2026-07-28` & `2025-11-25` Server)
 ```bash
 # Start unified FastAPI REST (/v1/*) + MCP (/mcp/http/, /mcp/sse, /v1/mcp/*) server on port 8095
 adk-memory serve-api --host 0.0.0.0 --port 8095 --mode in_memory

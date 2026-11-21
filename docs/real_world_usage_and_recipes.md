@@ -363,3 +363,87 @@ pg_adapter = PostgresPgVectorAdapter(
 | **OpenAI / Azure OpenAI / vLLM** | `OpenAICompatibleEmbeddingAdapter(base_url="https://api.openai.com/v1", model="text-embedding-3-small")` | `OpenAICompatibleOntologyExtractorAdapter(base_url="https://api.openai.com/v1", model="gpt-4o-mini")` |
 | **Local Ollama** | `OllamaEmbeddingAdapter(model="nomic-embed-text", target_dim=1536)` | `OllamaOntologyExtractorAdapter(model="llama3.2")` |
 | **Local SentenceTransformers** | `LocalSentenceTransformerEmbeddingAdapter(model_name="BAAI/bge-small-en-v1.5", target_dim=1536)` | *(Pair with any LLM extractor above)* |
+
+---
+
+## 6. LangGraph & LangChain Integration Recipes (`agentic_composite_memory.langgraph_integration`)
+
+`agentic-composite-memory` ships with 4 first-class LangGraph and LangChain adapters that work with **either** in-process `CompositeMemoryService` or stateless `RemoteCompositeMemoryService` (zero hard dependency required; automatically subclasses `langgraph.store.base.BaseStore`, `langchain_core.tools.StructuredTool`, and `BaseChatMessageHistory` when installed):
+
+### 6.1 LangGraph `BaseStore` Adapter (`LangGraphCompositeMemoryStore`)
+Attach 3-Tier Ontology-Grounded Memory directly to a compiled LangGraph graph via `builder.compile(store=...)`:
+
+```python
+from agentic_composite_memory import LangGraphCompositeMemoryStore, RemoteCompositeMemoryService
+
+memory_client = RemoteCompositeMemoryService(base_url="http://localhost:8095")
+lg_store = LangGraphCompositeMemoryStore(
+    memory_client,
+    default_app_name="aurora_retail:order_fulfillment_agent",
+    default_user_id="maya_lin",
+)
+
+# Inside any LangGraph node with `store: BaseStore`:
+await lg_store.aput(
+    ("aurora_retail:order_fulfillment_agent", "maya_lin", "memories"),
+    "turn_1",
+    {"text": "Order ORD-9001 re-routed to WH-Dallas-02."},
+)
+
+# 3-Tier Hybrid Recall (Playbooks + 2-Hop Bi-Temporal Graph + Episodic turns)
+items = await lg_store.asearch(
+    ("aurora_retail:order_fulfillment_agent", "maya_lin"),
+    query="Where is ORD-9001 shipping from?",
+)
+for item in items:
+    print(item.key, item.score, item.value["text"])
+```
+
+### 6.2 Pre-Built LangGraph `StateGraph` Nodes (`create_langgraph_memory_nodes`)
+Wire automatic pre-LLM recall, pre-flight answerability checking, and post-LLM turn + tool-trace commit into a `StateGraph`:
+
+```python
+from agentic_composite_memory import create_langgraph_memory_nodes
+
+nodes = create_langgraph_memory_nodes(
+    memory_client,
+    default_app_name="aurora_retail:returns_concierge_agent",
+    default_user_id="maya_lin",
+    inject_system_message=True,
+)
+
+# In your LangGraph StateGraph builder:
+# builder.add_node("check_coverage", nodes.check_answerable_node)
+# builder.add_node("recall_memory", nodes.recall_node)
+# builder.add_node("agent", call_model_node)
+# builder.add_node("commit_memory", nodes.commit_node)
+```
+
+### 6.3 LangGraph ReAct / `ToolNode` Tools (`get_langgraph_memory_tools`)
+Bind all 5 memory tools (`recall_memory_context`, `check_memory_answerable`, `commit_memory_episode`, `register_memory_playbook`, `record_memory_decision_trace`) to `create_react_agent` or `ToolNode`:
+
+```python
+from agentic_composite_memory import get_langgraph_memory_tools
+
+tools = get_langgraph_memory_tools(
+    memory_client,
+    default_app_name="aurora_retail:returns_concierge_agent",
+    default_user_id="maya_lin",
+)
+# agent = create_react_agent(model, tools=tools)
+```
+
+### 6.4 LangChain `BaseChatMessageHistory` (`CompositeMemoryChatMessageHistory`)
+Use with `RunnableWithMessageHistory`:
+
+```python
+from agentic_composite_memory import CompositeMemoryChatMessageHistory
+
+history = CompositeMemoryChatMessageHistory(
+    memory_client,
+    app_name="aurora_retail:returns_concierge_agent",
+    user_id="maya_lin",
+    session_id="thread_101",
+)
+```
+

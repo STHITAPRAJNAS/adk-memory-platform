@@ -18,6 +18,13 @@ from .adk_integration import (
     get_adk_memory_tools,
     non_blocking_memory_commit_callback,
 )
+from .langgraph_integration import (
+    CompositeMemoryChatMessageHistory,
+    LangGraphCompositeMemoryStore,
+    LangGraphMemoryNodes,
+    create_langgraph_memory_nodes,
+    get_langgraph_memory_tools,
+)
 from .auth import (
     AwsIamDatabaseAuthProvider,
     AzureEntraDatabaseAuthProvider,
@@ -159,6 +166,11 @@ __all__ = [
     "RemoteCompositeMemoryService",
     "non_blocking_memory_commit_callback",
     "get_adk_memory_tools",
+    "LangGraphCompositeMemoryStore",
+    "LangGraphMemoryNodes",
+    "create_langgraph_memory_nodes",
+    "get_langgraph_memory_tools",
+    "CompositeMemoryChatMessageHistory",
     "create_memory_platform_app",
     "MemoryMcpServerTools",
     "create_mcp_server",
