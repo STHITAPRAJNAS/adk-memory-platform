@@ -235,7 +235,10 @@ uv run python examples/three_consumption_patterns_demo.py
 # 5. Run the 5-Agent Enterprise Stress & Maturity Benchmark against live Docker
 uv run python examples/realistic_enterprise_stress_test.py
 
-# 6. Test the published PyPI package in an isolated environment against live Docker
+# 6. Run the Head-to-Head A/B Enterprise Agent Lift Benchmark (ADK + LangGraph + FastAPI + MCP 2026-07-28)
+uv run python examples/enterprise_agent_lift_benchmark.py
+
+# 7. Test the published PyPI package in an isolated environment against live Docker
 uv run --isolated --no-project --refresh --with "agentic-composite-memory[all]" \
   python examples/realistic_enterprise_stress_test.py
 ```
