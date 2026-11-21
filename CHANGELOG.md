@@ -5,6 +5,21 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-11-21
+
+### Added
+- **12-Class Layer-0 Cognitive Upper Ontology (`UpperConceptType` & Universal Relations)**:
+  - Expanded Layer-0 from 6 to **12 cognitive memory primitives** and **22 universal relations** inspired by cognitive architectures (CoALA, ACT-R, Soar, Mem0, Letta/MemGPT) and enterprise upper ontologies (BFO, DOLCE, PROV-O):
+    - `p:PolicyGuardrail` (`CONSTRAINED_BY`, `VIOLATES`) — Hard negative constraints & compliance rules (`pinned_cognitive` compaction immunity + `1.5x` salience boost).
+    - `p:WorkingHypothesis` (`HYPOTHESIZES`, `SUPPORTED_BY`, `REFUTED_BY`) — Speculative beliefs with **Epistemic Collapse Protection** (never invalidate `CONFIRMED` functional edges in Neo4j/InMemory; rendered with `[UNCONFIRMED_HYPOTHESIS]` and `0.6x` salience penalty).
+    - `p:EpisodicLesson` (`LEARNED_FROM`, `MITIGATED_BY`) — Post-mortem reflections & failure-avoidance lessons (`pinned_cognitive` compaction immunity + `1.25x` salience boost).
+    - `p:ProspectiveGoal` (`HAS_GOAL`, `BLOCKED_BY`, `DEPENDS_ON_GOAL`) — Future intentions & reminders (`1.3x` salience boost).
+    - `p:QuantitativeMetric` (`HAS_METRIC`, `BREACHES_THRESHOLD`) — Typed KPIs, SLAs, and thresholds for structured bi-temporal tracking.
+    - `p:SpatialLocation` (`LOCATED_AT`) — Physical & logical places (warehouses, cloud regions, clinics, stores).
+- **Live Docker 9-Scenario Enterprise Agent Lift Benchmark (`examples/enterprise_agent_lift_benchmark.py`)**:
+  - Added **Scenario 9 (`9_layer0_cognitive_memory_contracts`)** verifying `p:PolicyGuardrail` and `p:EpisodicLesson` compaction immunity directly in live **PostgreSQL 16 + `pgvector`** and `p:WorkingHypothesis` Epistemic Collapse Protection directly in live **Neo4j 5** alongside **Redis 7**, **FastAPI**, **MCP `2026-07-28`**, **Google ADK**, and **LangGraph**.
+  - Updated [`docs/enterprise_agent_lift_report.json`](docs/enterprise_agent_lift_report.json), [`docs/architecture_and_ontology_guide.md`](docs/architecture_and_ontology_guide.md), [`docs/domain_pack_authoring_guide.md`](docs/domain_pack_authoring_guide.md), and [`README.md`](README.md).
+
 ## [0.1.6] - 2026-11-21
 
 ### Added

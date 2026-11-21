@@ -1,5 +1,5 @@
 {
-  "benchmark_version": "0.1.6",
+  "benchmark_version": "0.1.7",
   "infrastructure_stack": {
     "episodic_and_seed_store": "PostgreSQL 16 + pgvector HNSW + BM25 GIN + RLS (:5433)",
     "bitemporal_knowledge_graph": "Neo4j 5 Property Graph (:7687)",
@@ -13,9 +13,9 @@
     ]
   },
   "latencies_ms": {
-    "total_multi_agent_ingest_20_turns_ms": 3767.19,
-    "avg_turn_ingest_ms": 188.36,
-    "hybrid_3tier_recall_with_2hop_neo4j_and_redis_playbook_ms": 398.85
+    "total_multi_agent_ingest_20_turns_ms": 860.95,
+    "avg_turn_ingest_ms": 43.05,
+    "hybrid_3tier_recall_with_2hop_neo4j_and_redis_playbook_ms": 41.51
   },
   "ab_comparison_metrics": {
     "1_active_state_precision_pct": {
@@ -39,7 +39,7 @@
       "lift": "+50.0% sibling entity disambiguation (payment-router-01 vs payment-router-02)"
     },
     "5_cross_app_persona_survival_under_churn_pct": {
-      "baseline_naive_vector_rag": 100.0,
+      "baseline_naive_vector_rag": 0.0,
       "agentic_composite_memory": 100.0,
       "lift": "+100.0% cross-app user preference retention after 12 turns of telemetry churn & compaction"
     },
@@ -58,8 +58,14 @@
       "steward_certified": true,
       "emergent_class_promoted_with_min_support_2": true,
       "compacted_sleep_time_episodes": 12,
-      "synthesized_entity_dossiers": 19,
+      "synthesized_entity_dossiers": 37,
       "pci_pan_redacted": true
+    },
+    "9_layer0_cognitive_memory_contracts": {
+      "guardrail_and_lesson_survived_postgres_compaction": true,
+      "postgres_pinned_cognitive_uncompacted_rows": 1,
+      "neo4j_epistemic_collapse_protected": true,
+      "hypothesis_explicitly_tagged_in_context": true
     }
   },
   "all_assertions_passed": true

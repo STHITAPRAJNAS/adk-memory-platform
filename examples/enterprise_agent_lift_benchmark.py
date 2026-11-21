@@ -1,5 +1,5 @@
 """
-Enterprise A/B Agent Lift & Realistic Multi-Backend Stack Benchmark (`v0.1.6`).
+Enterprise A/B Agent Lift & Realistic Multi-Backend Stack Benchmark (`v0.1.7`).
 
 Validates `agentic-composite-memory` against a live containerized enterprise stack:
   - PostgreSQL 16 + `pgvector` HNSW + BM25 GIN + Row-Level Security (`127.0.0.1:5433`)
@@ -11,8 +11,8 @@ Validates `agentic-composite-memory` against a live containerized enterprise sta
 
 Quantitatively compares:
   - Arm A (Baseline): Naive Vector-Only RAG Memory (flat top-K chunk retrieval in PostgreSQL)
-  - Arm B (Platform): `agentic-composite-memory` 3-Layer Ontology + 3-Tier Context Graph
-across 8 enterprise evaluation scenarios, writing results to `docs/enterprise_agent_lift_report.json`.
+  - Arm B (Platform): `agentic-composite-memory` 3-Layer Ontology (12 Layer-0 Cognitive Primitives) + 3-Tier Context Graph
+across 9 enterprise evaluation scenarios, writing results to `docs/enterprise_agent_lift_report.json`.
 """
 
 from __future__ import annotations
@@ -243,6 +243,68 @@ def _configure_lift_extractor() -> RuleBasedMockExtractorAdapter:
     )
 
     # Scenario 7: Emergent Overflow Concept (`ColdChainShipments` / `cold_chain_shipment` -> `ColdChainShipment`)
+    # Scenario 9: Layer-0 Cognitive Memory Primitives (PolicyGuardrail + EpisodicLesson + WorkingHypothesis)
+    ext.add_keyword_rule(
+        "policy guardrail: must never ship ord-88410 via ground carrier",
+        ExtractionPayload(
+            entities=[
+                ExtractedEntity(canonical_name="ORD-88410", entity_class="CustomerOrder", summary="VIP Order 88410"),
+                ExtractedEntity(
+                    canonical_name="No-Ground-Carrier-For-ORD-88410",
+                    entity_class="p:PolicyGuardrail",
+                    summary="Policy Guardrail: Must never ship ORD-88410 via ground carrier",
+                ),
+                ExtractedEntity(
+                    canonical_name="Avoid-DHL-For-Locker-Deliveries",
+                    entity_class="p:EpisodicLesson",
+                    summary="Lesson learned: Avoid DHL for locker deliveries",
+                ),
+            ],
+            facts=[
+                ExtractedFact(
+                    source_entity="ORD-88410",
+                    source_class="CustomerOrder",
+                    predicate="CONSTRAINED_BY",
+                    target_entity="No-Ground-Carrier-For-ORD-88410",
+                    target_class="p:PolicyGuardrail",
+                    fact_summary="ORD-88410 must never be shipped via ground carrier",
+                    valid_from_iso="2026-11-10T17:00:00Z",
+                ),
+                ExtractedFact(
+                    source_entity="ORD-88410",
+                    source_class="CustomerOrder",
+                    predicate="LEARNED_FROM",
+                    target_entity="Avoid-DHL-For-Locker-Deliveries",
+                    target_class="p:EpisodicLesson",
+                    fact_summary="Lesson learned: Avoid DHL for locker deliveries",
+                    valid_from_iso="2026-11-10T17:00:00Z",
+                ),
+            ],
+        ),
+    )
+    ext.add_keyword_rule(
+        "hypothesis: ord-88410 might still be at fc-seattle-01",
+        ExtractionPayload(
+            entities=[
+                ExtractedEntity(canonical_name="ORD-88410", entity_class="CustomerOrder", summary="VIP Order 88410"),
+                ExtractedEntity(canonical_name="FC-Seattle-01", entity_class="FulfillmentCenter", summary="Seattle FC 01"),
+            ],
+            facts=[
+                ExtractedFact(
+                    source_entity="ORD-88410",
+                    source_class="CustomerOrder",
+                    predicate="HAS_PRIMARY_FC",
+                    target_entity="FC-Seattle-01",
+                    target_class="FulfillmentCenter",
+                    fact_summary="Hypothesis: ORD-88410 might still be at FC-Seattle-01 (unconfirmed)",
+                    epistemic_status="HYPOTHESIS",
+                    confidence=0.62,
+                    valid_from_iso="2026-11-11T10:00:00Z",
+                )
+            ],
+        ),
+    )
+
     ext.add_keyword_rule(
         "coldchainshipments shp-701 requires cryo-pallet-zone",
         ExtractionPayload(
@@ -520,6 +582,18 @@ relationships:
                     events=[_make_event(c_turn)],
                 )
 
+            # 2G. Layer-0 Cognitive Primitives (`p:PolicyGuardrail` + `p:EpisodicLesson`) ingested BEFORE compaction
+            guardrail_turn = (
+                "Policy Guardrail: Must never ship ORD-88410 via ground carrier. "
+                "Lesson learned: Avoid DHL for locker deliveries."
+            )
+            await baseline.ingest(guardrail_turn)
+            await service.add_events_to_memory(
+                app_name=f"{tenant_id}:langgraph_concierge",
+                user_id="maya_lin",
+                events=[_make_event(guardrail_turn)],
+            )
+
             ingest_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
             # Run Sleep-Time Maintenance & Multi-Support Ontology Evolution (`min_support_count=2`)
@@ -632,8 +706,47 @@ relationships:
                 query="What is the payroll tax in Antarctica?",
             )
 
+            # --- Evaluation 6 (Scenario 9): Layer-0 Cognitive Memory Contracts (Live Postgres + Neo4j) ---
+            # 1) Verify PolicyGuardrail & EpisodicLesson survived PostgreSQL sleep-time compaction (`pinned_cognitive=true`)
+            guardrail_survived_compaction = (
+                "No-Ground-Carrier-For-ORD-88410" in platform_q1_context
+                and "Avoid-DHL-For-Locker-Deliveries" in platform_q1_context
+            )
+            async with pg_adapter._pool.acquire() as conn:  # noqa: SLF001
+                pinned_pg_count = await conn.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM episodic_memories
+                    WHERE tenant_id = $1
+                      AND COALESCE(custom_metadata->>'is_summary', 'false') != 'true'
+                      AND COALESCE(custom_metadata->>'pinned_cognitive', 'false') = 'true'
+                    """,
+                    tenant_id,
+                )
+
+            # 2) Inject an unconfirmed `p:WorkingHypothesis` on the functional predicate `HAS_PRIMARY_FC`
+            #    and verify Epistemic Collapse Protection in live Neo4j:
+            #    confirmed `(ORD-88410) -[HAS_PRIMARY_FC]-> (FC-Dallas-03)` MUST remain ACTIVE!
+            await service.add_events_to_memory(
+                app_name=f"{tenant_id}:langgraph_concierge",
+                user_id="maya_lin",
+                events=[
+                    _make_event(
+                        "Hypothesis: ORD-88410 might still be at FC-Seattle-01 (unconfirmed)."
+                    )
+                ],
+            )
+            post_hyp_resp = await remote_client.search_memory(
+                app_name=f"{tenant_id}:langgraph_concierge",
+                user_id="maya_lin",
+                query="ORD-88410 fulfillment center status",
+            )
+            post_hyp_blob = "\n".join(m.content.parts[0].text for m in post_hyp_resp.memories)
+            confirmed_fact_protected = "(ORD-88410) -[HAS_PRIMARY_FC]-> (FC-Dallas-03)" in post_hyp_blob
+            hypothesis_explicitly_tagged = "[UNCONFIRMED_HYPOTHESIS]" in post_hyp_blob
+
             report = {
-                "benchmark_version": "0.1.6",
+                "benchmark_version": "0.1.7",
                 "infrastructure_stack": {
                     "episodic_and_seed_store": "PostgreSQL 16 + pgvector HNSW + BM25 GIN + RLS (:5433)",
                     "bitemporal_knowledge_graph": "Neo4j 5 Property Graph (:7687)",
@@ -702,6 +815,12 @@ relationships:
                         "synthesized_entity_dossiers": maint_stats.get("synthesized_entity_dossiers", 0),
                         "pci_pan_redacted": "4532-9911-0022-8877" not in platform_q1_context,
                     },
+                    "9_layer0_cognitive_memory_contracts": {
+                        "guardrail_and_lesson_survived_postgres_compaction": guardrail_survived_compaction,
+                        "postgres_pinned_cognitive_uncompacted_rows": int(pinned_pg_count or 0),
+                        "neo4j_epistemic_collapse_protected": confirmed_fact_protected,
+                        "hypothesis_explicitly_tagged_in_context": hypothesis_explicitly_tagged,
+                    },
                 },
                 "all_assertions_passed": all(
                     [
@@ -718,6 +837,10 @@ relationships:
                         cert_res["certified"] is True,
                         "ColdChainShipment" in evolve_res.get("added_or_modified_classes", {}),
                         "4532-9911-0022-8877" not in platform_q1_context,
+                        guardrail_survived_compaction,
+                        int(pinned_pg_count or 0) >= 1,
+                        confirmed_fact_protected,
+                        hypothesis_explicitly_tagged,
                     ]
                 ),
             }
