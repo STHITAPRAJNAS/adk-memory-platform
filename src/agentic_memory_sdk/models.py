@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class UpperConceptType(str, Enum):
@@ -293,7 +293,10 @@ class ExtractedFact(BaseModel):
     target_class: str
     fact_summary: str
     confidence: float = Field(default=0.9, ge=0.0, le=1.0)
-    valid_from: str | None = None
+    valid_from: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("valid_from", "valid_from_iso", "t_valid"),
+    )
     scope: MemoryScope = Field(
         default=MemoryScope.AUTO,
         description="Target sharing scope (auto, user_global, app_private, domain_shared)",

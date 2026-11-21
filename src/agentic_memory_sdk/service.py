@@ -1709,6 +1709,15 @@ class CompositeMemoryService(BaseMemoryService):
             "december",
             "today",
             "yesterday",
+            "shipping",
+            "shipped",
+            "deployed",
+            "running",
+            "located",
+            "assigned",
+            "owned",
+            "using",
+            "used",
         }
         for m in re.finditer(r"\b[A-Za-z][A-Za-z0-9_]{2,}\b", query):
             if any(not (m.end() <= s or m.start() >= e) for s, e in consumed_spans):

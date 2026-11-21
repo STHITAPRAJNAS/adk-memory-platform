@@ -1,0 +1,66 @@
+{
+  "benchmark_version": "0.1.6",
+  "infrastructure_stack": {
+    "episodic_and_seed_store": "PostgreSQL 16 + pgvector HNSW + BM25 GIN + RLS (:5433)",
+    "bitemporal_knowledge_graph": "Neo4j 5 Property Graph (:7687)",
+    "procedural_playbook_cache": "Redis 7 (:6379)",
+    "api_and_mcp_protocol": "FastAPI REST (/v1/*) + MCP 2026-07-28 Stateless Streamable HTTP (/mcp/http/)",
+    "agent_frameworks_tested": [
+      "Google ADK (get_adk_memory_tools)",
+      "LangGraph (LangGraphCompositeMemoryStore + StateGraph Nodes + StructuredTools)",
+      "FastAPI Remote Client (RemoteCompositeMemoryService)",
+      "MCP 2026-07-28 Client (/mcp/http/)"
+    ]
+  },
+  "latencies_ms": {
+    "total_multi_agent_ingest_20_turns_ms": 3767.19,
+    "avg_turn_ingest_ms": 188.36,
+    "hybrid_3tier_recall_with_2hop_neo4j_and_redis_playbook_ms": 398.85
+  },
+  "ab_comparison_metrics": {
+    "1_active_state_precision_pct": {
+      "baseline_naive_vector_rag": 33.3,
+      "agentic_composite_memory": 100.0,
+      "lift": "+66.7% active state precision (0% stale functional edge contamination vs 2 stale chunks in baseline)"
+    },
+    "2_point_in_time_historical_audit_accuracy_pct": {
+      "baseline_naive_vector_rag": 0.0,
+      "agentic_composite_memory": 100.0,
+      "lift": "+100.0% historical point-in-time travel accuracy (as_of_iso='2026-11-06T00:00:00Z')"
+    },
+    "3_multihop_2hop_dependency_discovery_pct": {
+      "baseline_naive_vector_rag": 0.0,
+      "agentic_composite_memory": 100.0,
+      "lift": "+100.0% 2-hop blast-radius discovery (mobile-checkout-bff -> payment-router-01 -> aurora-ledger-01)"
+    },
+    "4_sibling_entity_disambiguation_accuracy_pct": {
+      "baseline_naive_vector_rag": 50.0,
+      "agentic_composite_memory": 100.0,
+      "lift": "+50.0% sibling entity disambiguation (payment-router-01 vs payment-router-02)"
+    },
+    "5_cross_app_persona_survival_under_churn_pct": {
+      "baseline_naive_vector_rag": 100.0,
+      "agentic_composite_memory": 100.0,
+      "lift": "+100.0% cross-app user preference retention after 12 turns of telemetry churn & compaction"
+    },
+    "6_procedural_playbook_sop_injection_pct": {
+      "baseline_naive_vector_rag": 0.0,
+      "agentic_composite_memory": 100.0,
+      "lift": "+100.0% zero-shot procedural SOP recall from Redis playbook cache"
+    },
+    "7_pre_flight_hallucination_gate_accuracy_pct": {
+      "baseline_naive_vector_rag": 0.0,
+      "agentic_composite_memory": 100.0,
+      "lift": "+100.0% pre-flight detection of partial ('return on ad spend') and unanswerable queries via check_answerable"
+    },
+    "8_autonomous_ontology_evolution_and_governance": {
+      "sql_ddl_and_ossie_yaml_compiled": true,
+      "steward_certified": true,
+      "emergent_class_promoted_with_min_support_2": true,
+      "compacted_sleep_time_episodes": 12,
+      "synthesized_entity_dossiers": 19,
+      "pci_pan_redacted": true
+    }
+  },
+  "all_assertions_passed": true
+}

@@ -1,0 +1,643 @@
+{
+  "verified_at": "2026-11-21T17:29:28Z",
+  "surfaces_verified": [
+    "1. Google ADK A2A Multi-Agent Mesh (:8090 platform_concierge -> :8091 sre_specialist & :8092 crm_specialist)",
+    "2. Centralized FastAPI Memory Platform API (:8095 /v1/apps/register, /v1/memory/*, /v1/domains/packs/review, /v1/maintenance/run, /v1/audit/ontology)",
+    "3. Model Context Protocol (MCP) Server (create_mcp_server / MemoryMcpServerTools over live Docker DBs)",
+    "4. Docker PostgreSQL 16 + pgvector (:5433) with RLS, Partitioned HNSW, RRF Hybrid Search & Transactional Outbox",
+    "5. Docker Neo4j 5 (:7687) with Bi-Temporal openCypher Graph (t_valid / t_invalid) & Tier 3 Reasoning Traces",
+    "6. Docker Redis 7 (:6379) with Tier 3 Semantic Playbook Caching & Reinforcement"
+  ],
+  "a2a_agent_turns": {
+    "sre_active_query_reply": "[SRE Specialist] Recalled from `domain:t1:sre_infra`:\n[ACTIVE_ONTOLOGY_GRAPH_FACTS]\n- [domain:t1:sre_infra] (checkout-api) -[READS_FROM]-> (aurora-payments-01): checkout-api reads from aurora-payments-01 [valid_from=2026-01-15T00:00:00Z]\n- [domain:t1:sre_infra] (checkout-api) -[DEPLOYED_IN_PRIMARY]-> (us-west-2): checkout-api failed over to primary region us-west-2 [valid_from=2026-11-01T00:00:00Z]\n- [app:t1:sre_specialist] (checkout-api) -[RELATED_TO]-> (experimental-chaos-mesh): [ProposedPredicate=TESTED_WITH_UNREGISTERED_TOOL|Microservice->UnregisteredChaosTool] checkout-api was tested with experimental-chaos-mesh [valid_from=2026-11-01T00:00:00Z]\n\n---\nRemember: checkout-api is deployed in us-east-1 and reads from aurora-payments-01\n---\nRemember: We failed checkout-api over to us-west-2 using experimental-chaos-mesh",
+    "sre_historical_time_travel_2026_06_01_reply": "[SRE Specialist] Recalled from `domain:t1:sre_infra`:\n[ACTIVE_ONTOLOGY_GRAPH_FACTS]\n- [domain:t1:sre_infra] (checkout-api) -[READS_FROM]-> (aurora-payments-01): checkout-api reads from aurora-payments-01 [valid_from=2026-01-15T00:00:00Z]\n- [domain:t1:sre_infra] (checkout-api) -[DEPLOYED_IN_PRIMARY]-> (us-east-1): checkout-api primary region is us-east-1 [valid_from=2026-01-15T00:00:00Z]\n\n---\nRemember: We failed checkout-api over to us-west-2 using experimental-chaos-mesh\n---\nRemember: checkout-api is deployed in us-east-1 and reads from aurora-payments-01",
+    "crm_query_reply": "[CRM Specialist] Recalled from `domain:t1:customer_crm`:\n[ACTIVE_ONTOLOGY_GRAPH_FACTS]\n- [domain:t1:customer_crm] (Acme-Corp) -[SUBSCRIBED_TO_TIER]-> (Enterprise-Platinum): Acme-Corp is subscribed to Enterprise-Platinum tier [valid_from=2026-11-05T00:00:00Z]\n\n---\nRemember: Acme-Corp upgraded to Enterprise-Platinum",
+    "cross_domain_isolation_probe_reply": "[CRM Specialist] Recalled from `domain:t1:customer_crm`:\n[ACTIVE_ONTOLOGY_GRAPH_FACTS]\n- [domain:t1:customer_crm] (Acme-Corp) -[SUBSCRIBED_TO_TIER]-> (Enterprise-Platinum): Acme-Corp is subscribed to Enterprise-Platinum tier [valid_from=2026-11-05T00:00:00Z]\n\n---\nRemember: Acme-Corp upgraded to Enterprise-Platinum"
+  },
+  "mcp_surface_recall": {
+    "query": "checkout-api deployment and database",
+    "as_of": null,
+    "max_hops": 2,
+    "memories": [
+      {
+        "author": "platform_knowledge_graph",
+        "timestamp": null,
+        "text": "[ACTIVE_ONTOLOGY_GRAPH_FACTS]\n- [domain:t1:sre_infra] (checkout-api) -[READS_FROM]-> (aurora-payments-01): checkout-api reads from aurora-payments-01 [valid_from=2026-01-15T00:00:00Z]\n- [domain:t1:sre_infra] (checkout-api) -[DEPLOYED_IN_PRIMARY]-> (us-west-2): checkout-api failed over to primary region us-west-2 [valid_from=2026-11-01T00:00:00Z]\n- [app:t1:sre_specialist] (checkout-api) -[RELATED_TO]-> (experimental-chaos-mesh): [ProposedPredicate=TESTED_WITH_UNREGISTERED_TOOL|Microservice->UnregisteredChaosTool] checkout-api was tested with experimental-chaos-mesh [valid_from=2026-11-01T00:00:00Z]\n"
+      }
+    ]
+  },
+  "postgres_physical_state": {
+    "registered_apps": [
+      {
+        "tenant_id": "t1",
+        "app_name": "sre_specialist",
+        "read_namespaces": [
+          "app:t1:sre_specialist",
+          "global:t1:core",
+          "domain:t1:sre_infra"
+        ],
+        "write_namespace": "domain:t1:sre_infra"
+      },
+      {
+        "tenant_id": "t1",
+        "app_name": "crm_specialist",
+        "read_namespaces": [
+          "app:t1:crm_specialist",
+          "global:t1:core",
+          "domain:t1:customer_crm"
+        ],
+        "write_namespace": "domain:t1:customer_crm"
+      }
+    ],
+    "episodic_memories": [
+      {
+        "episode_id": "69cef892-4900-4869-913c-152517e0afb1",
+        "tenant_id": "t1",
+        "app_name": "sre_specialist",
+        "user_id": "sre_operator",
+        "namespace": "app:t1:sre_specialist",
+        "author": "sre_specialist",
+        "content_text": "Remember: checkout-api is deployed in us-east-1 and reads from aurora-payments-01",
+        "created_at": "2026-11-21T17:29:21.776517+00:00"
+      },
+      {
+        "episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440",
+        "tenant_id": "t1",
+        "app_name": "sre_specialist",
+        "user_id": "sre_operator",
+        "namespace": "app:t1:sre_specialist",
+        "author": "sre_specialist",
+        "content_text": "Remember: We failed checkout-api over to us-west-2 using experimental-chaos-mesh",
+        "created_at": "2026-11-21T17:29:24.844828+00:00"
+      },
+      {
+        "episode_id": "770146bc-c91b-45d1-b08d-0990f22c4232",
+        "tenant_id": "t1",
+        "app_name": "crm_specialist",
+        "user_id": "crm_account_exec",
+        "namespace": "app:t1:crm_specialist",
+        "author": "crm_specialist",
+        "content_text": "Remember: Acme-Corp upgraded to Enterprise-Platinum",
+        "created_at": "2026-11-21T17:29:26.961054+00:00"
+      }
+    ],
+    "graph_seed_index": [
+      {
+        "neptune_vertex_id": "v_t1_5b4a4ae4b720330c",
+        "tenant_id": "t1",
+        "namespace": "app:t1:sre_specialist",
+        "entity_class": "p:CandidateConcept",
+        "upper_class": "p:CandidateConcept",
+        "canonical_name": "experimental-chaos-mesh",
+        "summary_text": "[ProposedClass=UnregisteredChaosTool] Emergent chaos engineering tool used during failover"
+      },
+      {
+        "neptune_vertex_id": "v_t1_9453a9627ae833cf",
+        "tenant_id": "t1",
+        "namespace": "domain:t1:customer_crm",
+        "entity_class": "CustomerAccount",
+        "upper_class": "p:Actor",
+        "canonical_name": "Acme-Corp",
+        "summary_text": "Strategic enterprise customer Acme-Corp [Dossier: SUBSCRIBED_TO_TIER->Enterprise-Platinum]"
+      },
+      {
+        "neptune_vertex_id": "v_t1_8f4f529647a7086e",
+        "tenant_id": "t1",
+        "namespace": "domain:t1:customer_crm",
+        "entity_class": "SubscriptionPlan",
+        "upper_class": "p:Concept",
+        "canonical_name": "Enterprise-Platinum",
+        "summary_text": "Highest-tier Enterprise Platinum subscription"
+      },
+      {
+        "neptune_vertex_id": "v_t1_0ce989e245658a19",
+        "tenant_id": "t1",
+        "namespace": "domain:t1:sre_infra",
+        "entity_class": "DatabaseCluster",
+        "upper_class": "p:Object",
+        "canonical_name": "aurora-payments-01",
+        "summary_text": "Primary Aurora PostgreSQL cluster for checkout"
+      },
+      {
+        "neptune_vertex_id": "v_t1_c78fdaa95dfa3ee3",
+        "tenant_id": "t1",
+        "namespace": "domain:t1:sre_infra",
+        "entity_class": "Microservice",
+        "upper_class": "p:Object",
+        "canonical_name": "checkout-api",
+        "summary_text": "Core checkout payment microservice (failed over to us-west-2) [Dossier: RELATED_TO->experimental-chaos-mesh, DEPLOYED_IN_PRIMARY->us-west-2, READS_FROM->aurora-payments-01]"
+      },
+      {
+        "neptune_vertex_id": "v_t1_0690ea9837048e83",
+        "tenant_id": "t1",
+        "namespace": "domain:t1:sre_infra",
+        "entity_class": "CloudRegion",
+        "upper_class": "p:Concept",
+        "canonical_name": "us-east-1",
+        "summary_text": "AWS US East N. Virginia region"
+      },
+      {
+        "neptune_vertex_id": "v_t1_ac6ca554cdbb5ad6",
+        "tenant_id": "t1",
+        "namespace": "domain:t1:sre_infra",
+        "entity_class": "CloudRegion",
+        "upper_class": "p:Concept",
+        "canonical_name": "us-west-2",
+        "summary_text": "AWS US West Oregon failover region"
+      }
+    ],
+    "processed_outbox_batches": 3
+  },
+  "neo4j_physical_state": {
+    "entities": [
+      {
+        "vertex_id": null,
+        "name": "experimental-chaos-mesh",
+        "entity_class": "p:CandidateConcept",
+        "namespace": "app:t1:sre_specialist",
+        "summary": "[ProposedClass=UnregisteredChaosTool] Emergent chaos engineering tool used during failover"
+      },
+      {
+        "vertex_id": null,
+        "name": "Acme-Corp",
+        "entity_class": "CustomerAccount",
+        "namespace": "domain:t1:customer_crm",
+        "summary": "Strategic enterprise customer Acme-Corp"
+      },
+      {
+        "vertex_id": null,
+        "name": "Enterprise-Platinum",
+        "entity_class": "SubscriptionPlan",
+        "namespace": "domain:t1:customer_crm",
+        "summary": "Highest-tier Enterprise Platinum subscription"
+      },
+      {
+        "vertex_id": null,
+        "name": "aurora-payments-01",
+        "entity_class": "DatabaseCluster",
+        "namespace": "domain:t1:sre_infra",
+        "summary": "Primary Aurora PostgreSQL cluster for checkout"
+      },
+      {
+        "vertex_id": null,
+        "name": "aurora-payments-01",
+        "entity_class": "DatabaseCluster",
+        "namespace": "domain:t1:sre_infra",
+        "summary": "Primary Aurora PostgreSQL cluster for checkout"
+      },
+      {
+        "vertex_id": null,
+        "name": "checkout-api",
+        "entity_class": "Microservice",
+        "namespace": "domain:t1:sre_infra",
+        "summary": "Core checkout payment microservice (failed over to us-west-2)"
+      },
+      {
+        "vertex_id": null,
+        "name": "checkout-api",
+        "entity_class": "Microservice",
+        "namespace": "domain:t1:sre_infra",
+        "summary": "Core checkout payment microservice (failed over to us-west-2)"
+      },
+      {
+        "vertex_id": null,
+        "name": "us-east-1",
+        "entity_class": "CloudRegion",
+        "namespace": "domain:t1:sre_infra",
+        "summary": "AWS US East N. Virginia region"
+      },
+      {
+        "vertex_id": null,
+        "name": "us-east-1",
+        "entity_class": "CloudRegion",
+        "namespace": "domain:t1:sre_infra",
+        "summary": "AWS US East N. Virginia region"
+      },
+      {
+        "vertex_id": null,
+        "name": "us-west-2",
+        "entity_class": "CloudRegion",
+        "namespace": "domain:t1:sre_infra",
+        "summary": "AWS US West Oregon failover region"
+      }
+    ],
+    "bitemporal_edges": [
+      {
+        "source": "checkout-api",
+        "predicate": "READS_FROM",
+        "target": "aurora-payments-01",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-01-15T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.98,
+        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "READS_FROM",
+        "target": "aurora-payments-01",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-01-15T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.98,
+        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "DEPLOYED_IN_PRIMARY",
+        "target": "us-east-1",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-01-15T00:00:00Z",
+        "t_invalid": "2026-11-01T00:00:00Z",
+        "confidence": 0.98,
+        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "DEPLOYED_IN_PRIMARY",
+        "target": "us-east-1",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-01-15T00:00:00Z",
+        "t_invalid": "2026-11-01T00:00:00Z",
+        "confidence": 0.98,
+        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "READS_FROM",
+        "target": "aurora-payments-01",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-01-15T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.98,
+        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "READS_FROM",
+        "target": "aurora-payments-01",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-01-15T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.98,
+        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "DEPLOYED_IN_PRIMARY",
+        "target": "us-east-1",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-01-15T00:00:00Z",
+        "t_invalid": "2026-11-01T00:00:00Z",
+        "confidence": 0.98,
+        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "DEPLOYED_IN_PRIMARY",
+        "target": "us-east-1",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-01-15T00:00:00Z",
+        "t_invalid": "2026-11-01T00:00:00Z",
+        "confidence": 0.98,
+        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "RELATED_TO",
+        "target": "experimental-chaos-mesh",
+        "namespace": "app:t1:sre_specialist",
+        "t_valid": "2026-11-01T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.9,
+        "source_episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "DEPLOYED_IN_PRIMARY",
+        "target": "us-west-2",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-11-01T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.96,
+        "source_episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "RELATED_TO",
+        "target": "experimental-chaos-mesh",
+        "namespace": "app:t1:sre_specialist",
+        "t_valid": "2026-11-01T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.9,
+        "source_episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440"
+      },
+      {
+        "source": "checkout-api",
+        "predicate": "DEPLOYED_IN_PRIMARY",
+        "target": "us-west-2",
+        "namespace": "domain:t1:sre_infra",
+        "t_valid": "2026-11-01T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.96,
+        "source_episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440"
+      },
+      {
+        "source": "Acme-Corp",
+        "predicate": "SUBSCRIBED_TO_TIER",
+        "target": "Enterprise-Platinum",
+        "namespace": "domain:t1:customer_crm",
+        "t_valid": "2026-11-05T00:00:00Z",
+        "t_invalid": "ACTIVE",
+        "confidence": 0.95,
+        "source_episode_id": "770146bc-c91b-45d1-b08d-0990f22c4232"
+      }
+    ],
+    "procedural_reasoning_trace_steps": 2
+  },
+  "redis_physical_state": {
+    "cached_playbooks": [
+      {
+        "playbook_id": "pb_sre_failover_01",
+        "tenant_id": "t1",
+        "namespace": "domain:t1:sre_infra",
+        "app_name": "sre_specialist",
+        "trigger_intent": "checkout-api us-west-2 failover runbook",
+        "workflow_steps": [
+          "verify_aurora_replica_lag",
+          "shift_route53_weights_us_west_2",
+          "validate_checkout_synthetic_probes"
+        ],
+        "resolution_summary": "Standard Route53 + Aurora failover playbook for checkout-api",
+        "success_count": 2,
+        "updated_at": "2026-11-21T17:29:28.327162+00:00"
+      }
+    ]
+  },
+  "ontology_steward_audit_log": [
+    {
+      "audit_id": "aud_21c54d39cf92",
+      "tenant_id": "platform",
+      "target_id": "customer_crm@v2.0",
+      "action": "REGISTER_DOMAIN_PACK",
+      "previous_version": "0.0.0",
+      "new_version": "2.0.0",
+      "added_or_modified_classes": {
+        "CustomerAccount": "p:Actor",
+        "SubscriptionPlan": "p:Concept",
+        "SupportTicket": "p:Event",
+        "AccountExecutive": "p:Actor"
+      },
+      "added_or_modified_relations": {
+        "SUBSCRIBED_TO_TIER": {
+          "predicate": "SUBSCRIBED_TO_TIER",
+          "domain_class": "CustomerAccount",
+          "range_class": "SubscriptionPlan",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": "A customer has exactly one active subscription tier at a time"
+        },
+        "MANAGED_BY_AE": {
+          "predicate": "MANAGED_BY_AE",
+          "domain_class": "CustomerAccount",
+          "range_class": "AccountExecutive",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": ""
+        },
+        "OPENED_TICKET": {
+          "predicate": "OPENED_TICKET",
+          "domain_class": "CustomerAccount",
+          "range_class": "SupportTicket",
+          "is_functional": false,
+          "is_transitive": false,
+          "description": ""
+        }
+      },
+      "modifications_summary": [
+        "Registered domain pack 'customer_crm@v2.0'"
+      ],
+      "triggered_by": "domain_steward",
+      "source_episode_ids": [],
+      "timestamp": "2026-11-21T17:29:12.263778+00:00"
+    },
+    {
+      "audit_id": "aud_63baddcdbdce",
+      "tenant_id": "platform",
+      "target_id": "clinical_trials@v1.0",
+      "action": "REGISTER_DOMAIN_PACK",
+      "previous_version": "0.0.0",
+      "new_version": "1.0.0",
+      "added_or_modified_classes": {
+        "ClinicalTrial": "p:Event",
+        "TherapeuticCompound": "p:Object",
+        "TrialPhase": "p:Concept",
+        "ResearchSite": "p:Actor"
+      },
+      "added_or_modified_relations": {
+        "CURRENT_PHASE": {
+          "predicate": "CURRENT_PHASE",
+          "domain_class": "ClinicalTrial",
+          "range_class": "TrialPhase",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": ""
+        },
+        "EVALUATES_COMPOUND": {
+          "predicate": "EVALUATES_COMPOUND",
+          "domain_class": "ClinicalTrial",
+          "range_class": "TherapeuticCompound",
+          "is_functional": false,
+          "is_transitive": false,
+          "description": ""
+        },
+        "CONDUCTED_AT_SITE": {
+          "predicate": "CONDUCTED_AT_SITE",
+          "domain_class": "ClinicalTrial",
+          "range_class": "ResearchSite",
+          "is_functional": false,
+          "is_transitive": false,
+          "description": ""
+        }
+      },
+      "modifications_summary": [
+        "Registered domain pack 'clinical_trials@v1.0'"
+      ],
+      "triggered_by": "domain_steward",
+      "source_episode_ids": [],
+      "timestamp": "2026-11-21T17:29:12.263778+00:00"
+    },
+    {
+      "audit_id": "aud_bdf0f31fb49c",
+      "tenant_id": "platform",
+      "target_id": "retail_omnichannel@1.0.0",
+      "action": "REGISTER_DOMAIN_PACK",
+      "previous_version": "0.0.0",
+      "new_version": "1.0.0",
+      "added_or_modified_classes": {
+        "RetailCustomer": "p:Actor",
+        "StoreAssociate": "p:Actor",
+        "ProductSKU": "p:Object",
+        "FulfillmentWarehouse": "p:Object",
+        "RetailStore": "p:Object",
+        "RetailOrder": "p:Event",
+        "ReturnRequest": "p:Event",
+        "LoyaltyTier": "p:Concept",
+        "BrandCollection": "p:Concept"
+      },
+      "added_or_modified_relations": {
+        "ENROLLED_IN_TIER": {
+          "predicate": "ENROLLED_IN_TIER",
+          "domain_class": "RetailCustomer",
+          "range_class": "LoyaltyTier",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": "A customer has exactly one active loyalty tier at any point in time; tier upgrades close t_invalid on prior tiers."
+        },
+        "SHIPPED_FROM_PRIMARY": {
+          "predicate": "SHIPPED_FROM_PRIMARY",
+          "domain_class": "RetailOrder",
+          "range_class": "FulfillmentWarehouse",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": "Primary fulfillment warehouse assigned to ship an order; warehouse re-routing closes t_invalid on the prior warehouse."
+        },
+        "CONTAINS_SKU": {
+          "predicate": "CONTAINS_SKU",
+          "domain_class": "RetailOrder",
+          "range_class": "ProductSKU",
+          "is_functional": false,
+          "is_transitive": false,
+          "description": "Links an order to the product SKUs purchased in that order."
+        },
+        "STOCKED_AT": {
+          "predicate": "STOCKED_AT",
+          "domain_class": "ProductSKU",
+          "range_class": "FulfillmentWarehouse",
+          "is_functional": false,
+          "is_transitive": false,
+          "description": "Indicates which fulfillment centers carry inventory for a ProductSKU."
+        },
+        "PLACED_ORDER": {
+          "predicate": "PLACED_ORDER",
+          "domain_class": "RetailCustomer",
+          "range_class": "RetailOrder",
+          "is_functional": false,
+          "is_transitive": false,
+          "description": "Links a customer to a retail order they placed."
+        },
+        "FOR_ORDER": {
+          "predicate": "FOR_ORDER",
+          "domain_class": "ReturnRequest",
+          "range_class": "RetailOrder",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": "Links a return or exchange request to the original retail order."
+        }
+      },
+      "modifications_summary": [
+        "Registered domain pack 'retail_omnichannel@1.0.0'"
+      ],
+      "triggered_by": "domain_steward",
+      "source_episode_ids": [],
+      "timestamp": "2026-11-21T17:29:12.264781+00:00"
+    },
+    {
+      "audit_id": "aud_a28e18c3ded2",
+      "tenant_id": "platform",
+      "target_id": "sre_infra@v1.2",
+      "action": "REGISTER_DOMAIN_PACK",
+      "previous_version": "0.0.0",
+      "new_version": "1.2.0",
+      "added_or_modified_classes": {
+        "Asset": "p:Object",
+        "SoftwareAsset": "Asset",
+        "InfrastructureAsset": "Asset",
+        "Microservice": "SoftwareAsset",
+        "DatabaseCluster": "InfrastructureAsset",
+        "CloudRegion": "p:Concept",
+        "EngineeringSquad": "p:Actor",
+        "Incident": "p:Event"
+      },
+      "added_or_modified_relations": {
+        "DEPLOYED_IN_PRIMARY": {
+          "predicate": "DEPLOYED_IN_PRIMARY",
+          "domain_class": "Microservice",
+          "range_class": "CloudRegion",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": "At most 1 active primary region per microservice"
+        },
+        "READS_FROM": {
+          "predicate": "READS_FROM",
+          "domain_class": "Microservice",
+          "range_class": "DatabaseCluster",
+          "is_functional": false,
+          "is_transitive": false,
+          "description": ""
+        },
+        "DEPENDS_ON": {
+          "predicate": "DEPENDS_ON",
+          "domain_class": "Asset",
+          "range_class": "Asset",
+          "is_functional": false,
+          "is_transitive": true,
+          "description": ""
+        },
+        "OWNED_BY": {
+          "predicate": "OWNED_BY",
+          "domain_class": "Asset",
+          "range_class": "EngineeringSquad",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": ""
+        },
+        "IMPACTS_ASSET": {
+          "predicate": "IMPACTS_ASSET",
+          "domain_class": "Incident",
+          "range_class": "Asset",
+          "is_functional": false,
+          "is_transitive": false,
+          "description": ""
+        }
+      },
+      "modifications_summary": [
+        "Registered domain pack 'sre_infra@v1.2'"
+      ],
+      "triggered_by": "domain_steward",
+      "source_episode_ids": [],
+      "timestamp": "2026-11-21T17:29:12.264781+00:00"
+    },
+    {
+      "audit_id": "aud_5da7027ae66d",
+      "tenant_id": "platform",
+      "target_id": "finops@v1.0",
+      "action": "LLM_REVIEW_AND_REFINE",
+      "previous_version": "1.0.0",
+      "new_version": "1.0.1",
+      "added_or_modified_classes": {
+        "CloudBudget": "p:Object",
+        "FinOpsOwner": "p:Actor"
+      },
+      "added_or_modified_relations": {
+        "OWNED_BY_PRIMARY": {
+          "predicate": "OWNED_BY_PRIMARY",
+          "domain_class": "CloudBudget",
+          "range_class": "FinOpsOwner",
+          "is_functional": true,
+          "is_transitive": false,
+          "description": ""
+        }
+      },
+      "modifications_summary": [
+        "Rooted unanchored class 'CloudBudget' under Layer 0 'p:Object'",
+        "Rooted unanchored class 'FinOpsOwner' under Layer 0 'p:Actor'",
+        "Normalized predicate 'owned-by-primary' -> 'OWNED_BY_PRIMARY'",
+        "Enabled bi-temporal functional invalidation (is_functional=True) on singular-state predicate 'OWNED_BY_PRIMARY'"
+      ],
+      "triggered_by": "ontology_intelligence_steward",
+      "source_episode_ids": [],
+      "timestamp": "2026-11-21T17:29:28.353129+00:00"
+    }
+  ]
+}
