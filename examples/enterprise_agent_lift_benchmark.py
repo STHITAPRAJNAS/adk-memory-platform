@@ -32,7 +32,6 @@ from agentic_composite_memory import (
     AppMemoryManifest,
     CompositeMemoryService,
     DeterministicHashEmbeddingAdapter,
-    DomainPackLoader,
     Event,
     ExtractedEntity,
     ExtractedFact,
@@ -542,7 +541,7 @@ relationships:
             base_q1_chunks = await baseline.retrieve(q1, top_k=4)
             base_q1_blob = "\n".join(base_q1_chunks)
             # Baseline retrieves stale FC-Seattle-01 and FC-Reno-02 chunks alongside FC-Dallas-03!
-            base_stale_fcs = sum(
+            sum(
                 1 for stale in ("FC-Seattle-01", "FC-Reno-02") if stale in base_q1_blob
             )
 
