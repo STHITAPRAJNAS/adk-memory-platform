@@ -20,10 +20,12 @@ To support **100s of arbitrary ADK agent apps** on one shared platform without f
 
 ```text
 +-----------------------------------------------------------------------------------+
-| LAYER 0: PLATFORM UPPER ONTOLOGY (Mandatory for 100% of Agent Apps, Zero-Config)  |
-|   Classes:    p:Actor, p:Object, p:Event, p:Concept, p:CandidateConcept,          |
-|               p:UserPreference                                                    |
-|   Properties: t_valid, t_invalid, t_created, tenant_id, namespace, episode_id     |
+| LAYER 0: PLATFORM UPPER ONTOLOGY & COGNITIVE MEMORY TAXONOMY (Zero-Config)        |
+|   Core World Classes:  p:Actor, p:Object, p:Event, p:Concept, p:SpatialLocation,  |
+|                        p:QuantitativeMetric                                       |
+|   Cognitive Classes:   p:UserPreference, p:PolicyGuardrail, p:WorkingHypothesis,  |
+|                        p:EpisodicLesson, p:ProspectiveGoal, p:CandidateConcept    |
+|   Properties:          t_valid, t_invalid, t_created, tenant_id, namespace        |
 +-----------------------------------------+-----------------------------------------+
                                           | rdfs:subClassOf / Extends
           +-------------------------------+-------------------------------+
@@ -31,12 +33,31 @@ To support **100s of arbitrary ADK agent apps** on one shared platform without f
 +-----------------------------------------+     +-----------------------------------+
 | LAYER 1: FEDERATED DOMAIN PACKS         |     | LAYER 2: APP-LOCAL EXTENSIONS     |
 | (Plug-and-Play Shared Business TBoxes)  |     | (Self-Service / Emergent Schema)  |
-|   - sre_infra@v1.2                      |     |   - Inline Python Pydantic models |
-|   - customer_crm@v2.0                   |     |   - Auto-quarantined overflow in  |
-|   - clinical_trials@v1.0                |     |     `app:{tenant}:{app}`          |
+|   - retail_omnichannel@1.0.0            |     |   - Inline Python Pydantic models |
+|   - sre_infra@v1.2                      |     |   - Auto-quarantined overflow in  |
+|   - customer_crm@v2.0                   |     |     `app:{tenant}:{app}`          |
 |   - payments@v2.1 (.ttl OWL/SHACL)      |     |   - Bottom-up promotion to TBox   |
 +-----------------------------------------+     +-----------------------------------+
 ```
+
+### The 12 Layer-0 Upper Ontology Classes & Their Automatic Runtime Contracts
+
+Every agent application automatically inherits these 12 domain-agnostic Layer-0 classes (`UpperConceptType`) and 22 universal relations (`_default_layer0_relations()`):
+
+| Layer-0 Class (`UpperConceptType`) | Universal Predicates | Cognitive Role & Automatic Runtime Contract |
+| :--- | :--- | :--- |
+| **`p:Actor`** | `ASSIGNED_TO`, `OWNED_BY` | People, customers, merchants, teams, organizations, agents. |
+| **`p:Object`** | `LOCATED_IN`, `DEPENDS_ON`, `PART_OF` | Physical or digital systems/assets (microservices, DBs, SKUs, warehouses). |
+| **`p:Event`** | `CAUSED_BY`, `HAS_STATUS` | Time-bounded occurrences (orders, shipments, incidents, transactions). |
+| **`p:Concept`** | `HAS_STATUS`, `RELATED_TO` | Abstract domain concepts, tiers, categories, and lifecycle states. |
+| **`p:UserPreference`** | `PREFERS`, `HAS_PREFERENCE` | **Cross-App Persona Contract**: Automatically routed to `user:{tenant}:{user_id}`, immune to session compaction, and included in recall across all apps for that user. |
+| **`p:PolicyGuardrail`** | `MUST_NOT_EXECUTE`, `REQUIRES_APPROVAL_FOR`, `CONSTRAINED_BY_POLICY` | **Normative Guardrail Contract**: Auto-detected from negative/compliance constraints (`"must never"`, `"requires approval"`). Pinned against session compaction (`pinned_cognitive=True`) and given `+0.35` salience priority in `TokenBudgetSerializer`. |
+| **`p:WorkingHypothesis`** | `HYPOTHESIZES_CAUSE`, `ASSUMES_STATE` | **Epistemic Collapse Protection**: Tags tentative beliefs with `[UNCONFIRMED_HYPOTHESIS]` and forces `is_functional=False` during validation so an unconfirmed theory **never** invalidates a confirmed functional edge. |
+| **`p:EpisodicLesson`** | `LEARNED_FROM_FAILURE`, `AVOIDS_PITFALL`, `CORRECTED_BY_USER` | **Reflexion / Self-Improvement Contract**: Captures user corrections and operational postmortems. Immune to session compaction and given `+0.35` salience boost. |
+| **`p:ProspectiveGoal`** | `HAS_PENDING_GOAL`, `HAS_GOAL_STATUS`, `BLOCKED_BY` | **Prospective Memory Contract**: Tracks pending follow-ups, SLAs, and deferred intentions. Pinned while active (`+0.20` salience boost) and retired bi-temporally when functional `HAS_GOAL_STATUS` transitions to `COMPLETED`. |
+| **`p:QuantitativeMetric`** | `MEASURED_AT_VALUE`, `HAS_THRESHOLD` | **Functional Metric Superseding**: Tracks measurable KPIs, SLAs, and financial figures where new readings bi-temporally supersede old readings (`is_functional=True`). |
+| **`p:SpatialLocation`** | `LOCATED_IN` | Physical or logical venues, addresses, and coordinates. |
+| **`p:CandidateConcept`** | `RELATED_TO` | **Bucket-2 Quarantine Contract**: Holds emergent out-of-schema concepts (`[ProposedClass=...]`) in `app:{tenant}:{app}` until promoted via `evolve_app_ontology_from_overflow()`. |
 
 ### Progressive Governance Tiers (`GovernanceTier`)
 

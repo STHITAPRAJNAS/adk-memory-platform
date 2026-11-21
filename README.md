@@ -47,9 +47,11 @@ from agentic_memory_sdk import CompositeMemoryService, RemoteCompositeMemoryServ
 
 ```text
 +-----------------------------------------------------------------------------------+
-| LAYER 0: PLATFORM UPPER ONTOLOGY (Mandatory for 100% of Agent Apps, Zero-Config)  |
-|   Classes:    p:Actor, p:Object, p:Event, p:Concept, p:CandidateConcept,          |
-|               p:UserPreference                                                    |
+| LAYER 0: PLATFORM UPPER ONTOLOGY & COGNITIVE MEMORY TAXONOMY (Zero-Config)        |
+|   World Classes:     p:Actor, p:Object, p:Event, p:Concept, p:SpatialLocation,    |
+|                      p:QuantitativeMetric                                         |
+|   Cognitive Classes: p:UserPreference, p:PolicyGuardrail, p:WorkingHypothesis,    |
+|                      p:EpisodicLesson, p:ProspectiveGoal, p:CandidateConcept      |
 +-----------------------------------------+-----------------------------------------+
                                           | rdfs:subClassOf / Extends
           +-------------------------------+-------------------------------+
@@ -63,8 +65,8 @@ from agentic_memory_sdk import CompositeMemoryService, RemoteCompositeMemoryServ
 +-----------------------------------------+     +-----------------------------------+
 ```
 
-1. **3-Layer Domain-Agnostic Ontology**:
-   - **Layer 0 (Platform Upper Ontology)**: Built-in meta-graph (`p:Actor`, `p:Object`, `p:Event`, `p:Concept`, `p:CandidateConcept`, `p:UserPreference`) requiring zero upfront configuration.
+1. **3-Layer Domain-Agnostic & Cognitive Ontology**:
+   - **Layer 0 (12-Class Platform Upper Ontology & Cognitive Memory Taxonomy)**: Built-in meta-graph combining core world classes (`p:Actor`, `p:Object`, `p:Event`, `p:Concept`, `p:SpatialLocation`, `p:QuantitativeMetric`) with 6 cognitive memory primitives—**`p:UserPreference`** (auto-routed to `user:{tenant}:{user_id}`), **`p:PolicyGuardrail`** (compaction-immune safety/compliance boundaries with `+0.35` salience priority), **`p:WorkingHypothesis`** (epistemic collapse protection—unconfirmed hypotheses never invalidate confirmed functional facts), **`p:EpisodicLesson`** (Reflexion/experiential user corrections & postmortems), **`p:ProspectiveGoal`** (active follow-ups & SLAs), and **`p:CandidateConcept`** (Bucket-2 quarantine).
    - **Layer 1 (Federated Domain Packs)**: Register domain ontologies for **Retail & Supply Chain**, **SRE & Cloud Ops**, **Healthcare**, **FinOps**, or **Customer CRM** via **JSON/YAML**, **Python Pydantic models**, or **W3C OWL/SHACL Turtle (`.ttl`)** files using `DomainPackLoader`.
    - **Layer 2 (Two-Bucket Runtime Governance & Auto-Evolution)**: `TBoxRuntimeValidator` routes validated facts to `domain:{tenant}:{domain}` and quarantines novel/low-confidence extractions in `app:{tenant}:{app}`, with automated promotion via `evolve_app_ontology_from_overflow()`.
 

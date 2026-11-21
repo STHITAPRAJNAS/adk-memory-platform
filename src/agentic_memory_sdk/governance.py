@@ -178,6 +178,29 @@ class SmartMemoryClassifier:
         "WORKS_IN_ROLE",
     }
 
+    _GUARDRAIL_PREDICATES = {
+        "MUST_NOT_EXECUTE",
+        "REQUIRES_APPROVAL_FOR",
+        "CONSTRAINED_BY_POLICY",
+    }
+
+    _LESSON_PREDICATES = {
+        "LEARNED_FROM_FAILURE",
+        "AVOIDS_PITFALL",
+        "CORRECTED_BY_USER",
+    }
+
+    _HYPOTHESIS_PREDICATES = {
+        "HYPOTHESIZES_CAUSE",
+        "ASSUMES_STATE",
+    }
+
+    _GOAL_PREDICATES = {
+        "HAS_PENDING_GOAL",
+        "HAS_GOAL_STATUS",
+        "BLOCKED_BY",
+    }
+
     _CONFIRMATION_WORDS = {
         "yes",
         "yep",
@@ -230,6 +253,113 @@ class SmartMemoryClassifier:
         if fact.predicate in cls._USER_PREFERENCE_PREDICATES:
             return True
         return fact.target_entity in user_preference_entities
+
+    @classmethod
+    def classify_cognitive_markers(cls, text: str) -> dict[str, Any]:
+        """
+        Inspects an interaction turn for Layer-0 cognitive memory markers:
+          - `guardrail`: Hard constraints, prohibitions, or approval gates (`p:PolicyGuardrail`)
+          - `lesson`: User corrections, failure postmortems, or pitfalls to avoid (`p:EpisodicLesson`)
+          - `hypothesis`: Unconfirmed theories, suspicions, or tentative assumptions (`p:WorkingHypothesis`)
+          - `prospective_goal`: Pending follow-up tasks, deadlines, or objectives (`p:ProspectiveGoal`)
+        """
+        low = text.lower()
+        is_guardrail = any(
+            p in low
+            for p in (
+                "guardrail:",
+                "policy guardrail",
+                "must never ",
+                "must not ",
+                "do not ever ",
+                "strictly prohibited",
+                "requires approval",
+                "compliance policy:",
+            )
+        )
+        is_lesson = any(
+            p in low
+            for p in (
+                "lesson learned",
+                "user correction:",
+                "correction:",
+                "pitfall:",
+                "do not repeat",
+                "workaround:",
+                "postmortem lesson",
+            )
+        )
+        is_hypothesis = any(
+            p in low
+            for p in (
+                "hypothesis:",
+                "working hypothesis",
+                "unconfirmed",
+                "suspected cause",
+                "might be caused by",
+                "possibly caused by",
+                "tentative theory",
+            )
+        )
+        is_goal = any(
+            p in low
+            for p in (
+                "prospective goal:",
+                "pending goal:",
+                "action item:",
+                "todo:",
+                "remind me to ",
+                "follow up when ",
+                "must complete before ",
+            )
+        )
+        cognitive_types: list[str] = []
+        if is_guardrail:
+            cognitive_types.append("guardrail")
+        if is_lesson:
+            cognitive_types.append("lesson")
+        if is_goal:
+            cognitive_types.append("prospective_goal")
+        if is_hypothesis:
+            cognitive_types.append("hypothesis")
+        return {
+            "is_guardrail": is_guardrail,
+            "is_lesson": is_lesson,
+            "is_prospective_goal": is_goal,
+            "is_hypothesis": is_hypothesis,
+            "cognitive_types": cognitive_types,
+            "pinned_cognitive": bool(is_guardrail or is_lesson or is_goal),
+        }
+
+    @classmethod
+    def is_hypothesis_fact(
+        cls,
+        fact: ExtractedFact,
+        src_cls: str,
+        tgt_cls: str,
+        tbox: CompiledTBox,
+    ) -> bool:
+        """
+        Returns True if a fact represents an unconfirmed `p:WorkingHypothesis` or epistemic belief.
+        Unconfirmed hypotheses are prevented from invalidating confirmed functional edges!
+        """
+        if fact.predicate in cls._HYPOTHESIS_PREDICATES:
+            return True
+        if tbox.is_subclass_of(src_cls, UpperConceptType.HYPOTHESIS.value) or tbox.is_subclass_of(
+            tgt_cls, UpperConceptType.HYPOTHESIS.value
+        ):
+            return True
+        low_sum = fact.fact_summary.lower()
+        return any(
+            k in low_sum
+            for k in (
+                "[unconfirmed_hypothesis]",
+                "hypothesis:",
+                "(unconfirmed)",
+                "unconfirmed hypothesis",
+                "suspected cause:",
+            )
+        )
 
 
 class TBoxRuntimeValidator:
@@ -327,9 +457,18 @@ class TBoxRuntimeValidator:
                 and tbox.is_subclass_of(tgt_cls, rel_rule.range_class)
             )
             confidence_ok = fact_copy.confidence >= tbox.min_domain_confidence
+            is_hypothesis = SmartMemoryClassifier.is_hypothesis_fact(
+                fact_copy, src_cls, tgt_cls, tbox
+            )
+            if is_hypothesis and "[UNCONFIRMED_HYPOTHESIS]" not in fact_copy.fact_summary:
+                fact_copy.fact_summary = (
+                    f"[UNCONFIRMED_HYPOTHESIS] {fact_copy.fact_summary}"
+                )
 
             if domain_ok and confidence_ok and rel_rule is not None:
-                routed_facts.append((fact_copy, ctx.write_namespace, rel_rule.is_functional))
+                # Epistemic Collapse Protection: an unconfirmed hypothesis NEVER invalidates a confirmed functional edge!
+                effective_func = False if is_hypothesis else rel_rule.is_functional
+                routed_facts.append((fact_copy, ctx.write_namespace, effective_func))
             elif tbox.allow_emergent_overflow:
                 # Quarantine to app-private namespace; overflow facts never invalidate functional edges
                 orig_pred = fact_copy.predicate
@@ -490,6 +629,52 @@ class PlatformOntologyRegistrar:
             "optin",
             "consent",
         )
+        guardrail_keys = (
+            "guardrail",
+            "prohibition",
+            "mandate",
+            "compliancerule",
+            "safetyboundary",
+            "restriction",
+        )
+        hypothesis_keys = (
+            "hypothesis",
+            "assumption",
+            "belief",
+            "theory",
+            "suspicion",
+            "conjecture",
+        )
+        lesson_keys = (
+            "lesson",
+            "postmortem",
+            "pitfall",
+            "workaround",
+            "correction",
+        )
+        goal_keys = (
+            "goal",
+            "objective",
+            "milestone",
+            "todo",
+            "reminder",
+            "deadline",
+            "commitment",
+        )
+        metric_keys = (
+            "metric",
+            "kpi",
+            "threshold",
+            "sla",
+            "measurement",
+            "quota",
+        )
+        location_keys = (
+            "spatiallocation",
+            "geocoordinate",
+            "streetaddress",
+            "venue",
+        )
         obj_keys = (
             "service",
             "cluster",
@@ -537,6 +722,18 @@ class PlatformOntologyRegistrar:
         )
 
         for target in candidates_to_check:
+            if any(k in target for k in guardrail_keys):
+                return UpperConceptType.GUARDRAIL.value
+            if any(k in target for k in hypothesis_keys):
+                return UpperConceptType.HYPOTHESIS.value
+            if any(k in target for k in lesson_keys):
+                return UpperConceptType.LESSON.value
+            if any(k in target for k in goal_keys):
+                return UpperConceptType.GOAL.value
+            if any(k in target for k in metric_keys):
+                return UpperConceptType.METRIC.value
+            if any(k in target for k in location_keys):
+                return UpperConceptType.LOCATION.value
             if any(k in target for k in pref_keys):
                 return UpperConceptType.PREFERENCE.value
             if any(k in target for k in event_keys):
@@ -1153,9 +1350,36 @@ class TokenBudgetSerializer:
         import math
 
         is_user_persona = fact.namespace.startswith("user:")
-        persona_boost = 0.25 if is_user_persona else 0.0
+        is_guardrail_or_lesson = (
+            fact.predicate in SmartMemoryClassifier._GUARDRAIL_PREDICATES
+            or fact.predicate in SmartMemoryClassifier._LESSON_PREDICATES
+            or fact.source_class in (UpperConceptType.GUARDRAIL.value, UpperConceptType.LESSON.value)
+            or fact.target_class in (UpperConceptType.GUARDRAIL.value, UpperConceptType.LESSON.value)
+        )
+        is_active_goal = (
+            fact.predicate in SmartMemoryClassifier._GOAL_PREDICATES
+            or fact.source_class == UpperConceptType.GOAL.value
+            or fact.target_class == UpperConceptType.GOAL.value
+        ) and fact.target_name.upper() not in ("COMPLETED", "CANCELLED", "CLOSED")
+        is_unconfirmed_hypothesis = (
+            fact.predicate in SmartMemoryClassifier._HYPOTHESIS_PREDICATES
+            or fact.source_class == UpperConceptType.HYPOTHESIS.value
+            or fact.target_class == UpperConceptType.HYPOTHESIS.value
+            or "[UNCONFIRMED_HYPOTHESIS]" in fact.fact_summary
+        )
+
+        cognitive_boost = 0.0
+        if is_guardrail_or_lesson:
+            cognitive_boost += 0.35
+        if is_user_persona:
+            cognitive_boost += 0.25
+        if is_active_goal:
+            cognitive_boost += 0.20
+        if is_unconfirmed_hypothesis:
+            cognitive_boost -= 0.15
+
         reinforcement_boost = 1.0 + 0.15 * math.log1p(max(0, fact.reinforcement_count - 1))
-        return (fact.confidence * reinforcement_boost) + persona_boost
+        return (fact.confidence * reinforcement_boost) + cognitive_boost
 
     @staticmethod
     def serialize(

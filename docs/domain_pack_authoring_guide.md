@@ -6,12 +6,18 @@ This guide explains how **Layer-1 Federated Domain Packs (`DomainPackSpec`)** wo
 
 ## 1. Anatomy of a Layer-1 Domain Pack (`DomainPackSpec`)
 
-In `agentic-composite-memory`, the core engine is 100% domain-agnostic. It provides **Layer 0 (Platform Upper Ontology)**:
+In `agentic-composite-memory`, the core engine is 100% domain-agnostic. It provides **Layer 0 (Platform Upper Ontology & Cognitive Memory Taxonomy)** with 12 built-in classes (`UpperConceptType`):
 - **`p:Actor`**: People, customers, organizations, merchants, banks, carriers, agents, teams.
 - **`p:Object`**: Physical or digital assets, SKUs, warehouses, microservices, databases, ledger accounts, payment cards.
 - **`p:Event`**: Time-bounded occurrences—orders, shipments, payment transactions, chargeback disputes, outages, deployments.
-- **`p:Concept`**: Policies, loyalty tiers, risk scores, regulatory rules, status codes, currencies.
-- **`p:UserPreference`**: Personal user settings, sizing/fabric preferences, communication styles (automatically routed to `user:{tenant}:{user_id}`).
+- **`p:Concept`**: General domain concepts, loyalty tiers, risk scores, status codes, currencies.
+- **`p:UserPreference`**: Personal user settings, sizing/fabric preferences, communication styles (auto-routed to `user:{tenant}:{user_id}` and immune to session compaction).
+- **`p:PolicyGuardrail`**: Normative safety boundaries, compliance rules, and approval gates (`MUST_NOT_EXECUTE`, `REQUIRES_APPROVAL_FOR`, `CONSTRAINED_BY_POLICY` — pinned against compaction and given `+0.35` salience priority).
+- **`p:WorkingHypothesis`**: Epistemic memory for tentative, unconfirmed theories or beliefs (`HYPOTHESIZES_CAUSE`, `ASSUMES_STATE` — tagged `[UNCONFIRMED_HYPOTHESIS]` and blocked from invalidating confirmed functional facts).
+- **`p:EpisodicLesson`**: Reflexion/experiential memory for user corrections, postmortem insights, and pitfalls to avoid (`LEARNED_FROM_FAILURE`, `AVOIDS_PITFALL`, `CORRECTED_BY_USER` — pinned against compaction and given `+0.35` salience priority).
+- **`p:ProspectiveGoal`**: Prospective memory for active goals, SLAs, pending follow-ups, and deadlines (`HAS_PENDING_GOAL`, functional `HAS_GOAL_STATUS`, `BLOCKED_BY`).
+- **`p:QuantitativeMetric`**: Measurable KPIs, thresholds, financial totals, and latency/error readings (functional `MEASURED_AT_VALUE`, `HAS_THRESHOLD`).
+- **`p:SpatialLocation`**: Physical or logical venues, addresses, and coordinates (`LOCATED_IN`).
 - **`p:CandidateConcept`**: Automatic quarantine class for novel/unvalidated concepts discovered in `app:{tenant}:{app}` (`Bucket 2`).
 
 A **Layer-1 Domain Pack (`DomainPackSpec`)** plugs your business vocabulary into Layer 0:

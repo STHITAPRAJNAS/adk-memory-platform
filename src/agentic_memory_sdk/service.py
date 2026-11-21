@@ -124,7 +124,7 @@ class CompositeMemoryService(BaseMemoryService):
         default_tenant_id: str = "t1",
         max_context_tokens: int = 1500,
         graph_timeout_sec: float = 1.5,
-        sync_outbox_immediately: bool = False,
+        sync_outbox_immediately: bool = True,
         default_extraction_mode: ExtractionMode | str = ExtractionMode.HOT,
         playbook_adapter: PlaybookStoreAdapter | None = None,
     ):
@@ -400,8 +400,14 @@ class CompositeMemoryService(BaseMemoryService):
             ep_meta = dict(custom_metadata or {})
             if is_ephemeral:
                 ep_meta["ephemeral"] = True
-            elif should_defer:
-                ep_meta["extraction_pending"] = True
+            else:
+                cog = SmartMemoryClassifier.classify_cognitive_markers(clean_text)
+                if cog["cognitive_types"]:
+                    ep_meta["cognitive_types"] = cog["cognitive_types"]
+                if cog["pinned_cognitive"]:
+                    ep_meta["pinned_cognitive"] = True
+                if should_defer:
+                    ep_meta["extraction_pending"] = True
 
             ep = EpisodicRecord(
                 tenant_id=ctx.tenant_id,
@@ -797,7 +803,11 @@ class CompositeMemoryService(BaseMemoryService):
             groups: dict[tuple[str, str, str, str], list[EpisodicRecord]] = defaultdict(list)
             passthrough: list[EpisodicRecord] = []
             for ep in kept_episodes:
-                if ep.metadata.get("is_summary"):
+                if (
+                    ep.metadata.get("is_summary")
+                    or ep.metadata.get("pinned_cognitive")
+                    or ep.namespace.startswith("user:")
+                ):
                     passthrough.append(ep)
                 else:
                     groups[(ep.tenant_id, ep.app_name, ep.user_id, ep.session_id)].append(ep)
@@ -911,6 +921,8 @@ class CompositeMemoryService(BaseMemoryService):
                            namespace, author, content_text, custom_metadata
                     FROM episodic_memories
                     WHERE COALESCE(custom_metadata->>'is_summary', 'false') != 'true'
+                      AND COALESCE(custom_metadata->>'pinned_cognitive', 'false') != 'true'
+                      AND namespace NOT LIKE 'user:%'
                     ORDER BY created_at ASC
                     """
                 )

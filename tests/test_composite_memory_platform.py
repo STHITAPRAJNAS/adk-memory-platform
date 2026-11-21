@@ -2211,6 +2211,188 @@ async def test_langgraph_base_store_stategraph_nodes_tools_and_chat_history():
     assert len(history.messages) == 0
 
 
+@pytest.mark.asyncio
+async def test_layer0_cognitive_memory_primitives_guardrails_hypotheses_lessons_and_goals():
+    """
+    Verifies the 6 expanded Layer-0 Cognitive Memory Primitives & Runtime Contracts:
+      1. `p:PolicyGuardrail` (`MUST_NOT_EXECUTE`, `REQUIRES_APPROVAL_FOR`, `CONSTRAINED_BY_POLICY`):
+         Auto-detected by `SmartMemoryClassifier`, pinned against session compaction, and boosted
+         in `TokenBudgetSerializer.compute_salience`.
+      2. `p:WorkingHypothesis` (`HYPOTHESIZES_CAUSE`, `ASSUMES_STATE`):
+         Prevents Epistemic Collapse—an unconfirmed hypothesis on a functional predicate (`HAS_STATUS`)
+         NEVER invalidates the confirmed functional edge, and gets tagged `[UNCONFIRMED_HYPOTHESIS]`.
+      3. `p:EpisodicLesson` (`LEARNED_FROM_FAILURE`, `AVOIDS_PITFALL`, `CORRECTED_BY_USER`):
+         Pinned against session compaction and given top salience priority.
+      4. `p:ProspectiveGoal` (`HAS_PENDING_GOAL`, `HAS_GOAL_STATUS`, `BLOCKED_BY`):
+         Functional lifecycle transitions (`PENDING` -> `COMPLETED`) supersede prior goal states.
+      5. `p:QuantitativeMetric` (`MEASURED_AT_VALUE`, `HAS_THRESHOLD`) & `p:SpatialLocation`:
+         Functional metric measurement superseding and head-noun Layer-0 alignment.
+    """
+    from agentic_memory_sdk.governance import TokenBudgetSerializer
+
+    # 1. Verify Head-Noun Alignment for all new Layer-0 Cognitive Classes
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("ComplianceGuardrail") == "p:PolicyGuardrail"
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("RootCauseHypothesis") == "p:WorkingHypothesis"
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("PostmortemLesson") == "p:EpisodicLesson"
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("MigrationGoal") == "p:ProspectiveGoal"
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("LatencyMetric") == "p:QuantitativeMetric"
+    assert PlatformOntologyRegistrar.infer_upper_concept_parent("DeliveryVenue") == "p:SpatialLocation"
+
+    store = InMemoryUnifiedAdapter()
+    extractor = RuleBasedMockExtractorAdapter()
+    service = CompositeMemoryService(
+        registry_adapter=store,
+        seed_store_adapter=store,
+        graph_adapter=store,
+        embedding_adapter=DeterministicHashEmbeddingAdapter(),
+        extractor_adapter=extractor,
+    )
+    registrar = PlatformOntologyRegistrar(store)
+    await registrar.register_adk_app(
+        AppMemoryManifest(
+            tenant_id="t_cog",
+            app_name="cognitive_agent",
+            governance_tier=GovernanceTier.TIER2_DOMAIN_SHARED,
+        )
+    )
+
+    # 2. Verify Epistemic Collapse Protection (`p:WorkingHypothesis` never invalidates a confirmed functional edge!)
+    # Step 2a: Ingest confirmed functional fact: (ORD-500) -[HAS_STATUS]-> (DELIVERED)
+    extractor.enqueue(
+        ExtractionPayload(
+            entities=[
+                ExtractedEntity(canonical_name="ORD-500", entity_class="p:Event", summary="Order 500"),
+                ExtractedEntity(canonical_name="DELIVERED", entity_class="p:Concept", summary="Confirmed delivered status"),
+            ],
+            facts=[
+                ExtractedFact(
+                    source_entity="ORD-500",
+                    source_class="p:Event",
+                    predicate="HAS_STATUS",
+                    target_entity="DELIVERED",
+                    target_class="p:Concept",
+                    fact_summary="ORD-500 confirmed delivered at locker",
+                    confidence=0.95,
+                )
+            ],
+        )
+    )
+    await service.add_events_to_memory(
+        app_name="t_cog:cognitive_agent",
+        user_id="u1",
+        session_id="cog_sess",
+        events=[_make_event("Order ORD-500 is confirmed DELIVERED.")],
+    )
+
+    # Step 2b: Ingest an unconfirmed WorkingHypothesis on the SAME functional predicate HAS_STATUS!
+    extractor.enqueue(
+        ExtractionPayload(
+            entities=[
+                ExtractedEntity(canonical_name="ORD-500", entity_class="p:Event", summary="Order 500"),
+                ExtractedEntity(
+                    canonical_name="LOST_IN_TRANSIT_THEORY",
+                    entity_class="p:WorkingHypothesis",
+                    summary="Unconfirmed theory that parcel was lost",
+                ),
+            ],
+            facts=[
+                ExtractedFact(
+                    source_entity="ORD-500",
+                    source_class="p:Event",
+                    predicate="HAS_STATUS",
+                    target_entity="LOST_IN_TRANSIT_THEORY",
+                    target_class="p:Concept",
+                    fact_summary="Hypothesis: ORD-500 might be lost in transit (unconfirmed)",
+                    confidence=0.90,
+                )
+            ],
+        )
+    )
+    await service.add_events_to_memory(
+        app_name="t_cog:cognitive_agent",
+        user_id="u1",
+        session_id="cog_sess",
+        events=[_make_event("Hypothesis: ORD-500 might be lost in transit (unconfirmed).")],
+    )
+
+    # Verify the confirmed `(ORD-500) -[HAS_STATUS]-> (DELIVERED)` edge is STILL ACTIVE!
+    active_edges = [
+        e for e in store.edges if e["tenant_id"] == "t_cog" and e["t_invalid"] == "ACTIVE"
+    ]
+    delivered_edges = [
+        e for e in active_edges if e["predicate"] == "HAS_STATUS" and "DELIVERED" in e["fact_summary"] or "confirmed delivered" in e["fact_summary"]
+    ]
+    assert len(delivered_edges) == 1, "Confirmed functional edge must NOT be invalidated by a WorkingHypothesis!"
+    hyp_edges = [
+        e for e in active_edges if "[UNCONFIRMED_HYPOTHESIS]" in e["fact_summary"]
+    ]
+    assert len(hyp_edges) == 1
+
+    # 3. Verify Compaction Immunity for `p:PolicyGuardrail`, `p:EpisodicLesson`, and `p:ProspectiveGoal`
+    await service.add_events_to_memory(
+        app_name="t_cog:cognitive_agent",
+        user_id="u1",
+        session_id="compact_sess",
+        events=[
+            _make_event("Policy Guardrail: Must never restart aurora-ledger-01 during market hours."),
+            _make_event("Lesson learned: Do not use DHL for Alaska locker deliveries; use FedEx."),
+            _make_event("Prospective goal: Follow up when WH-Dallas-02 scans parcel."),
+            _make_event("Routine status check 1: conveyor nominal."),
+            _make_event("Routine status check 2: temperature nominal."),
+            _make_event("Routine status check 3: scanner nominal."),
+        ],
+    )
+    maint = await service.run_memory_maintenance(min_episodes_to_compact=3)
+    assert maint["compacted_raw_episodes"] == 3  # Only the 3 routine status checks were compacted!
+
+    remaining_texts = [ep.content_text for ep in store.episodes if ep.session_id == "compact_sess"]
+    assert any("Policy Guardrail: Must never restart aurora-ledger-01" in t for t in remaining_texts)
+    assert any("Lesson learned: Do not use DHL" in t for t in remaining_texts)
+    assert any("Prospective goal: Follow up when WH-Dallas-02" in t for t in remaining_texts)
+    assert any("[AUTO_SESSION_SUMMARY (3 turns)]" in t for t in remaining_texts)
+
+    # 4. Verify Salience Ranking: Guardrail / Lesson > Standard Fact > Unconfirmed Hypothesis
+    guardrail_fact = GraphFactReadResult(
+        source_name="aurora-ledger-01",
+        source_class="p:Object",
+        predicate="CONSTRAINED_BY_POLICY",
+        target_name="No-Market-Hours-Restart",
+        target_class="p:PolicyGuardrail",
+        fact_summary="Never restart during market hours",
+        t_valid="2026-11-21T00:00:00Z",
+        t_invalid="ACTIVE",
+        namespace="app:t_cog:cognitive_agent",
+        confidence=0.90,
+    )
+    standard_fact = GraphFactReadResult(
+        source_name="aurora-ledger-01",
+        source_class="p:Object",
+        predicate="LOCATED_IN",
+        target_name="us-east-1",
+        target_class="p:Object",
+        fact_summary="Located in us-east-1",
+        t_valid="2026-11-21T00:00:00Z",
+        t_invalid="ACTIVE",
+        namespace="app:t_cog:cognitive_agent",
+        confidence=0.90,
+    )
+    hypothesis_fact = GraphFactReadResult(
+        source_name="aurora-ledger-01",
+        source_class="p:Object",
+        predicate="HYPOTHESIZES_CAUSE",
+        target_name="Noisy-Neighbor",
+        target_class="p:WorkingHypothesis",
+        fact_summary="[UNCONFIRMED_HYPOTHESIS] Suspected noisy neighbor",
+        t_valid="2026-11-21T00:00:00Z",
+        t_invalid="ACTIVE",
+        namespace="app:t_cog:cognitive_agent",
+        confidence=0.90,
+    )
+    assert TokenBudgetSerializer.compute_salience(guardrail_fact) > TokenBudgetSerializer.compute_salience(standard_fact)
+    assert TokenBudgetSerializer.compute_salience(standard_fact) > TokenBudgetSerializer.compute_salience(hypothesis_fact)
+
+
+
 
 
 

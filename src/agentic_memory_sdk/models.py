@@ -10,13 +10,33 @@ from pydantic import AliasChoices, BaseModel, Field
 
 
 class UpperConceptType(str, Enum):
-    """Layer 0 Platform Upper Ontology classes mandatory for all apps."""
+    """
+    Layer 0 Platform Upper Ontology & Cognitive Memory Taxonomy mandatory for all apps:
+      - ACTOR (`p:Actor`): Who (people, users, customers, merchants, teams, organizations, agents)
+      - OBJECT (`p:Object`): What physical or digital system/asset (services, DBs, SKUs, warehouses, tools)
+      - EVENT (`p:Event`): What happened (orders, shipments, incidents, transactions, deployments)
+      - CONCEPT (`p:Concept`): General domain concepts, tiers, categories, and states
+      - PREFERENCE (`p:UserPreference`): Personal user preferences & persona traits (`user:{tenant}:{user_id}`)
+      - GUARDRAIL (`p:PolicyGuardrail`): Hard constraints, safety boundaries, compliance rules ("what must not happen")
+      - HYPOTHESIS (`p:WorkingHypothesis`): Epistemic memory—unconfirmed theories or beliefs (never invalidates confirmed functional facts)
+      - LESSON (`p:EpisodicLesson`): Reflexion/experiential memory—user corrections, postmortem lessons, pitfalls to avoid
+      - GOAL (`p:ProspectiveGoal`): Prospective memory—active goals, SLAs, pending follow-ups, and deferred intentions
+      - METRIC (`p:QuantitativeMetric`): Measurable KPIs, thresholds, financial figures, and latency/error observations
+      - LOCATION (`p:SpatialLocation`): Physical or logical locations, venues, and coordinates
+      - CANDIDATE (`p:CandidateConcept`): Bucket-2 emergent overflow quarantine class
+    """
 
     ACTOR = "p:Actor"
     OBJECT = "p:Object"
     EVENT = "p:Event"
     CONCEPT = "p:Concept"
     PREFERENCE = "p:UserPreference"
+    GUARDRAIL = "p:PolicyGuardrail"
+    HYPOTHESIS = "p:WorkingHypothesis"
+    LESSON = "p:EpisodicLesson"
+    GOAL = "p:ProspectiveGoal"
+    METRIC = "p:QuantitativeMetric"
+    LOCATION = "p:SpatialLocation"
     CANDIDATE = "p:CandidateConcept"
 
 
@@ -140,7 +160,7 @@ def _default_layer0_relations() -> dict[str, RelationRule]:
         "HAS_STATUS": RelationRule(
             predicate="HAS_STATUS",
             domain_class="owl:Thing",
-            range_class="p:Concept",
+            range_class="owl:Thing",
             is_functional=True,
             description="Current lifecycle status (functional: supersedes prior status)",
         ),
@@ -187,6 +207,97 @@ def _default_layer0_relations() -> dict[str, RelationRule]:
             range_class="owl:Thing",
             is_functional=False,
             description="Root-cause causal link from an Event to an Object/Event/Actor",
+        ),
+        "MUST_NOT_EXECUTE": RelationRule(
+            predicate="MUST_NOT_EXECUTE",
+            domain_class="owl:Thing",
+            range_class="owl:Thing",
+            is_functional=False,
+            description="Hard negative constraint or prohibited action (PolicyGuardrail)",
+        ),
+        "REQUIRES_APPROVAL_FOR": RelationRule(
+            predicate="REQUIRES_APPROVAL_FOR",
+            domain_class="owl:Thing",
+            range_class="owl:Thing",
+            is_functional=False,
+            description="Compliance or human-in-the-loop approval gate (PolicyGuardrail)",
+        ),
+        "CONSTRAINED_BY_POLICY": RelationRule(
+            predicate="CONSTRAINED_BY_POLICY",
+            domain_class="owl:Thing",
+            range_class="p:PolicyGuardrail",
+            is_functional=False,
+            description="Links an actor, service, or workflow to a governing PolicyGuardrail",
+        ),
+        "HYPOTHESIZES_CAUSE": RelationRule(
+            predicate="HYPOTHESIZES_CAUSE",
+            domain_class="owl:Thing",
+            range_class="owl:Thing",
+            is_functional=False,
+            description="Tentative, unconfirmed root-cause hypothesis (never invalidates confirmed functional facts)",
+        ),
+        "ASSUMES_STATE": RelationRule(
+            predicate="ASSUMES_STATE",
+            domain_class="owl:Thing",
+            range_class="owl:Thing",
+            is_functional=False,
+            description="Probabilistic belief or working assumption pending verification",
+        ),
+        "LEARNED_FROM_FAILURE": RelationRule(
+            predicate="LEARNED_FROM_FAILURE",
+            domain_class="owl:Thing",
+            range_class="p:EpisodicLesson",
+            is_functional=False,
+            description="Experiential lesson or postmortem insight learned from a prior failure",
+        ),
+        "AVOIDS_PITFALL": RelationRule(
+            predicate="AVOIDS_PITFALL",
+            domain_class="owl:Thing",
+            range_class="owl:Thing",
+            is_functional=False,
+            description="Known operational pitfall or anti-pattern to avoid",
+        ),
+        "CORRECTED_BY_USER": RelationRule(
+            predicate="CORRECTED_BY_USER",
+            domain_class="owl:Thing",
+            range_class="p:EpisodicLesson",
+            is_functional=False,
+            description="Explicit user correction overriding a prior agent mistake",
+        ),
+        "HAS_PENDING_GOAL": RelationRule(
+            predicate="HAS_PENDING_GOAL",
+            domain_class="owl:Thing",
+            range_class="p:ProspectiveGoal",
+            is_functional=False,
+            description="Active prospective goal, follow-up intention, or SLA commitment",
+        ),
+        "HAS_GOAL_STATUS": RelationRule(
+            predicate="HAS_GOAL_STATUS",
+            domain_class="p:ProspectiveGoal",
+            range_class="p:Concept",
+            is_functional=True,
+            description="Current prospective goal lifecycle state (PENDING -> IN_PROGRESS -> COMPLETED)",
+        ),
+        "BLOCKED_BY": RelationRule(
+            predicate="BLOCKED_BY",
+            domain_class="owl:Thing",
+            range_class="owl:Thing",
+            is_functional=False,
+            description="Dependency or condition blocking a prospective goal or task",
+        ),
+        "MEASURED_AT_VALUE": RelationRule(
+            predicate="MEASURED_AT_VALUE",
+            domain_class="owl:Thing",
+            range_class="owl:Thing",
+            is_functional=True,
+            description="Current measured value of a QuantitativeMetric (functional: new reading supersedes old reading)",
+        ),
+        "HAS_THRESHOLD": RelationRule(
+            predicate="HAS_THRESHOLD",
+            domain_class="owl:Thing",
+            range_class="owl:Thing",
+            is_functional=True,
+            description="Configured SLA or alert threshold for a QuantitativeMetric (functional)",
         ),
     }
 
