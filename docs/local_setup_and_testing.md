@@ -10,7 +10,7 @@ The repository includes a ready-to-run [`docker-compose.yml`](../docker-compose.
 
 | Container | Image | Host Port | Credentials / URI | Role in Platform |
 | :--- | :--- | :--- | :--- | :--- |
-| **`adk-memory-postgres`** | `pgvector/pgvector:pg16` | `5433 -> 5432` | `postgresql://platform_admin:platform_secret@127.0.0.1:5433/adk_memory_platform` | Tenant Registry, Episodic & Seed Store (`pgvector` HNSW + BM25 GIN + RLS), Transactional Outbox |
+| **`adk-memory-postgres`** | `pgvector/pgvector:pg16` | `5433 -> 5432` | Runtime (RLS-enforced): `postgresql://platform_app_user:platform_secret@127.0.0.1:5433/adk_memory_platform` · Admin DDL (`init-db` / `migrate-db`): `platform_admin` | Tenant Registry, Episodic & Seed Store (`pgvector` HNSW + BM25 GIN + RLS), Transactional Outbox |
 | **`adk-memory-neo4j`** | `neo4j:5-community` | `7687` (Bolt), `7474` (HTTP) | `bolt://127.0.0.1:7687` (`neo4j` / `platform_secret`) | Tier-2 Bi-Temporal Knowledge Graph (`t_valid`, `t_invalid`) & Tier-3 Reasoning Traces |
 | **`adk-memory-redis`** | `redis:7-alpine` | `6379` | `redis://127.0.0.1:6379/0` | Sub-5ms Tier-3 Procedural Playbook Cache & Working Memory |
 

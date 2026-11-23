@@ -12,9 +12,9 @@ This guide distills architectural patterns, operational guardrails, and tuning r
 | :--- | :--- | :--- |
 | **1. Direct In-Process SDK** (`CompositeMemoryService`) | Single-service Python/ADK apps, batch ingestion workers, and latency-critical monoliths | Zero extra HTTP hop between the agent process and your database adapters (`Postgres`, `Neo4j`, `Redis`). |
 | **2. Co-Hosted FastAPI + `RemoteCompositeMemoryService`** | Horizontally scaled Kubernetes agent pods (`10–500` replicas) | Agent pods stay stateless and hold **zero DB credentials or heavy DB connection pools**; a central Memory Platform deployment manages DB pools, IAM token rotation, and the transactional outbox worker. |
-| **3. Model Context Protocol (`MCP 2026-07-28` / `2025-11-25`)** | Polyglot agent fleets (Claude Desktop, Cursor, Windsurf, Google ADK `McpToolset`, LangChain, TypeScript/Go agents) | Zero SDK coupling; agents discover all **11 annotated tools**, **4 live `memory://` resources**, and **2 prompts** dynamically over Streamable HTTP (`/mcp/http/`) or `stdio`. |
+| **3. Model Context Protocol (`MCP 2026-07-28` / `2025-11-25`)** | Polyglot agent fleets (Claude Desktop, Cursor, Windsurf, Google ADK `McpToolset`, LangChain, TypeScript/Go agents) | Zero SDK coupling; agents discover all **17 annotated tools**, **4 live `memory://` resources**, and **2 prompts** dynamically over Streamable HTTP (`/mcp/http/`) or `stdio`. |
 
-> **Best Practice — Hybrid Deployment**: Run `adk-memory serve-api --mode production` as a central Kubernetes Service. Python/ADK agents can attach `RemoteCompositeMemoryService` to `Runner(memory_service=...)`, while external MCP agents connect to `http://memory-platform:8095/mcp/http/` on the **exact same pod**.
+> **Best Practice — Hybrid Deployment**: Run `MEMORY_JWT_SECRET=... adk-memory serve-api --host 0.0.0.0 --backend docker` (or plug in your org's IdP/Gateway via `AuthPolicyConfig(custom_request_authenticator=...)`) as a central Kubernetes Service. Python/ADK agents can attach `RemoteCompositeMemoryService` to `Runner(memory_service=...)`, while external MCP agents connect to `http://memory-platform:8095/mcp/http/` on the **exact same pod**.
 
 ---
 

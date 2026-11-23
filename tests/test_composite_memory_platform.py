@@ -2527,7 +2527,7 @@ async def test_v020_reconciliation_ttl_working_blocks_rbac_jwt_console_ui_and_me
     assert {"ADD", "UPDATE", "RESOLVE", "EXPIRE"}.issubset(rev_actions)
 
     # 4. Enterprise FastAPI AuthN/AuthZ (JWT HS256 + API Key + RBAC + Tenant Isolation) + Console UI + Metrics
-    jwt_secret = "unit-test-super-secret-key"
+    jwt_secret = "unit-test-super-secret-key-at-least-32-bytes"
     auth_policy = AuthPolicyConfig(
         enabled=True,
         jwt_secret=jwt_secret,
@@ -2756,7 +2756,13 @@ async def test_v022_security_hardening_tenant_smuggling_mcp_rbac_jwt_claims_and_
     await registrar.register_adk_app(AppMemoryManifest(tenant_id="tenant_a", app_name="app"))
     await registrar.register_adk_app(AppMemoryManifest(tenant_id="tenant_b", app_name="app"))
 
-    # Seed secret memory in tenant_b and user data + working block in tenant_a
+    # Seed secret memory in t1 (default tenant), tenant_b, and user data + working block in tenant_a
+    await registrar.register_adk_app(AppMemoryManifest(tenant_id="t1", app_name="app"))
+    await service.add_events_to_memory(
+        app_name="t1:app",
+        user_id="bob",
+        events=[_make_event("DEFAULT TENANT t1 SECRET CODE ZETA-000.")],
+    )
     await service.add_events_to_memory(
         app_name="tenant_b:app",
         user_id="bob",
@@ -2774,10 +2780,22 @@ async def test_v022_security_hardening_tenant_smuggling_mcp_rbac_jwt_claims_and_
         value="Alice sensitive working scratchpad text.",
     )
 
-    secret = "hardened-test-secret"
+    # Verify short JWT secrets (<32 bytes) are rejected
+    with pytest.raises(ValueError, match="at least 32 bytes"):
+        AuthPolicyConfig(enabled=True, jwt_secret="too-short")
+
+    secret = "hardened-test-secret-with-more-than-32-bytes-entropy"
     auth_policy = AuthPolicyConfig(enabled=True, jwt_secret=secret)
     reader_a_jwt = mint_hs256_jwt(
         {"sub": "reader-a", "tenant_id": "tenant_a", "roles": [MemoryRole.READER.value]},
+        secret=secret,
+    )
+    compliance_a_jwt = mint_hs256_jwt(
+        {"sub": "comp-a", "tenant_id": "tenant_a", "roles": [MemoryRole.COMPLIANCE_ADMIN.value]},
+        secret=secret,
+    )
+    global_admin_jwt = mint_hs256_jwt(
+        {"sub": "global-admin", "tenant_id": "*", "roles": [MemoryRole.PLATFORM_ADMIN.value]},
         secret=secret,
     )
 
@@ -2866,6 +2884,148 @@ async def test_v022_security_hardening_tenant_smuggling_mcp_rbac_jwt_claims_and_
             headers={"Authorization": f"Bearer {jwt_no_tenant}"},
         )
         assert r_no_tenant.status_code == 401
+
+        # 6. Bare app_name (no tenant prefix) resolves to caller's OWN tenant, NEVER `t1`!
+        bare_search = await client.post(
+            "/v1/memory/search",
+            json={"app_name": "app", "user_id": "bob", "query": "ZETA-000"},
+            headers={"Authorization": f"Bearer {reader_a_jwt}"},
+        )
+        assert bare_search.status_code == 200
+        assert "ZETA-000" not in json.dumps(bare_search.json())
+
+        bare_purge = await client.post(
+            "/v1/lineage/purge",
+            json={"app_name": "app", "user_id": "bob"},
+            headers={"Authorization": f"Bearer {compliance_a_jwt}"},
+        )
+        assert bare_purge.status_code == 200
+        # Confirm t1's bob memory is STILL untouched!
+        assert any("ZETA-000" in ep.content_text for ep in store.episodes)
+
+        # 7. Unfiltered GET /v1/memory/revisions returns ONLY caller's tenant (`tenant_a`)
+        unfiltered_revs = await client.get(
+            "/v1/memory/revisions",
+            headers={"Authorization": f"Bearer {reader_a_jwt}"},
+        )
+        assert unfiltered_revs.status_code == 200
+        rev_tenants = {r["tenant_id"] for r in unfiltered_revs.json()["revisions"]}
+        assert rev_tenants == {"tenant_a"}
+
+        # 8. MCP for READER: tools/list succeeds (200), cross-tenant resource read blocked (403)
+        mcp_list_reader = await client.post(
+            "/mcp/http/",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-11-25",
+                "Authorization": f"Bearer {reader_a_jwt}",
+            },
+        )
+        assert mcp_list_reader.status_code == 200
+
+        mcp_res_cross = await client.post(
+            "/mcp/http/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "resources/read",
+                "params": {"uri": "memory://apps/t1/app/tbox"},
+            },
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-11-25",
+                "Authorization": f"Bearer {reader_a_jwt}",
+            },
+        )
+        assert mcp_res_cross.status_code == 403
+
+        # 9. Global admin routes (/v1/maintenance/run, /v1/outbox/flush) reject single-tenant roles (403)
+        maint_single = await client.post(
+            "/v1/maintenance/run",
+            headers={"Authorization": f"Bearer {compliance_a_jwt}"},
+        )
+        assert maint_single.status_code == 403
+        maint_global = await client.post(
+            "/v1/maintenance/run",
+            headers={"Authorization": f"Bearer {global_admin_jwt}"},
+        )
+        assert maint_global.status_code == 200
+
+    # 10. API Rate Limiting returns 429 when exceeded & bounds key table size
+    from agentic_memory_sdk.security import (
+        ApiRateLimiter,
+        AuthPrincipal,
+        reset_current_principal,
+        set_current_principal,
+    )
+
+    bounded_rl = ApiRateLimiter(default_rpm=5, max_keys=3)
+    for idx in range(10):
+        assert bounded_rl.check_and_record(f"client_{idx}") is True
+    assert len(bounded_rl._hits) <= 3
+
+    # 11. Service-layer `allowed_users` enforcement (protects /mcp/sse & direct service calls)
+    restricted_principal = AuthPrincipal(
+        subject="user-scoped-agent",
+        tenant_id="tenant_a",
+        roles=[MemoryRole.AGENT],
+        allowed_users=["alice"],
+    )
+    tok = set_current_principal(restricted_principal)
+    try:
+        with pytest.raises(PermissionError, match="User scope violation"):
+            await service.search_memory(app_name="tenant_a:app", user_id="bob", query="test")
+        with pytest.raises(PermissionError, match="User scope violation"):
+            service.upsert_working_memory_block(
+                app_name="tenant_a:app", user_id="bob", label="x", value="y"
+            )
+    finally:
+        reset_current_principal(tok)
+
+    rl_app = create_memory_platform_app(
+        service=service,
+        registrar=registrar,
+        enable_outbox_worker=False,
+        auth_policy=AuthPolicyConfig(enabled=True, jwt_secret=secret, api_rate_limit_rpm=2),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=rl_app), base_url="http://test.local"
+    ) as rl_client:
+        hdrs = {"Authorization": f"Bearer {reader_a_jwt}"}
+        assert (await rl_client.get("/v1/memory/revisions", headers=hdrs)).status_code == 200
+        assert (await rl_client.get("/v1/memory/revisions", headers=hdrs)).status_code == 200
+        assert (await rl_client.get("/v1/memory/revisions", headers=hdrs)).status_code == 429
+
+    # 12. Bring-Your-Own-Auth (BYOA) `custom_request_authenticator` (e.g., Istio/Kong headers, zero Bearer token)
+    async def gateway_header_auth(headers):
+        sub = headers.get("x-auth-subject")
+        tid = headers.get("x-auth-tenant")
+        if sub and tid:
+            return AuthPrincipal(subject=sub, tenant_id=tid, roles=[MemoryRole.READER])
+        return None
+
+    byoa_app = create_memory_platform_app(
+        service=service,
+        registrar=registrar,
+        enable_outbox_worker=False,
+        auth_policy=AuthPolicyConfig(enabled=True, custom_request_authenticator=gateway_header_auth),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=byoa_app), base_url="http://test.local"
+    ) as byoa_client:
+        # Missing gateway headers -> 401
+        assert (await byoa_client.get("/v1/memory/revisions")).status_code == 401
+        # Valid gateway headers for tenant_a -> 200 (scoped to tenant_a)
+        gw_hdrs = {"X-Auth-Subject": "spiffe://mesh/ns/a", "X-Auth-Tenant": "tenant_a"}
+        ok_resp = await byoa_client.get("/v1/memory/revisions", headers=gw_hdrs)
+        assert ok_resp.status_code == 200
+        assert all(r["tenant_id"] == "tenant_a" for r in ok_resp.json()["revisions"])
+        # Cross-tenant request with gateway headers -> 403
+        cross_gw = await byoa_client.get(
+            "/v1/memory/items?app_name=tenant_b:app&user_id=bob", headers=gw_hdrs
+        )
+        assert cross_gw.status_code == 403
 
     # 6. Complete GDPR purge erases working memory blocks AND memory revisions
     assert len(await service.async_get_working_memory_blocks("tenant_a:app", "alice")) == 1

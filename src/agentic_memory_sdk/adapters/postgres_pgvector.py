@@ -39,6 +39,7 @@ class PostgresPgVectorAdapter(RegistryStoreAdapter, EpisodicAndSeedStoreAdapter)
         self.auth_provider = auth_provider
         self.tls_config = tls_config
         self._pool = None
+        self._provisioned_tenants: set[str] = set()
 
     async def _get_pool(self):
         if self._pool is None:
@@ -100,6 +101,7 @@ class PostgresPgVectorAdapter(RegistryStoreAdapter, EpisodicAndSeedStoreAdapter)
         async with pool.acquire() as conn:
             # Ensure tenant partitions exist before registering app
             await conn.execute("SELECT provision_tenant_memory_partitions($1)", tenant_id)
+            self._provisioned_tenants.add(tenant_id)
             await conn.execute(
                 """
                 INSERT INTO platform_app_registry
@@ -173,24 +175,43 @@ class PostgresPgVectorAdapter(RegistryStoreAdapter, EpisodicAndSeedStoreAdapter)
         Programmatically initializes the PostgreSQL + pgvector RLS schema, partitions,
         HNSW vector indexes, and non-superuser role with configurable embedding dimensions.
         """
+        from importlib import resources as _pkg_resources
         from pathlib import Path
 
+        ddl: str | None = None
+        try:
+            bundled = _pkg_resources.files("agentic_memory_sdk.sql").joinpath(
+                "001_postgres_rls_and_partitions.sql"
+            )
+            if bundled.is_file():
+                ddl = bundled.read_text(encoding="utf-8")
+        except Exception:
+            ddl = None
+
+        if ddl is None:
+            sql_path = (
+                Path(__file__).resolve().parents[3]
+                / "docs"
+                / "sql"
+                / "001_postgres_rls_and_partitions.sql"
+            )
+            if sql_path.exists():
+                ddl = sql_path.read_text(encoding="utf-8")
+
+        if ddl is None:
+            raise FileNotFoundError(
+                "Could not locate bundled PostgreSQL schema '001_postgres_rls_and_partitions.sql' "
+                "in package resources ('agentic_memory_sdk.sql') or repository 'docs/sql/'."
+            )
+
         pool = await self._get_pool()
-        sql_path = (
-            Path(__file__).resolve().parents[3]
-            / "docs"
-            / "sql"
-            / "001_postgres_rls_and_partitions.sql"
-        )
-        if sql_path.exists():
-            ddl = sql_path.read_text(encoding="utf-8")
-            ddl = ddl.replace("vector(1536)", f"vector({embedding_dim})")
-            async with pool.acquire() as conn:
-                await conn.execute(ddl)
-                if default_tenant != "t1":
-                    await conn.execute(
-                        "SELECT provision_tenant_memory_partitions($1)", default_tenant
-                    )
+        ddl = ddl.replace("vector(1536)", f"vector({embedding_dim})")
+        async with pool.acquire() as conn:
+            await conn.execute(ddl)
+            if default_tenant != "t1":
+                await conn.execute(
+                    "SELECT provision_tenant_memory_partitions($1)", default_tenant
+                )
 
     async def resolve_existing_vertex_id(
         self,
@@ -241,6 +262,15 @@ class PostgresPgVectorAdapter(RegistryStoreAdapter, EpisodicAndSeedStoreAdapter)
         vertex_upserts: Sequence[GraphVertexUpsert],
         outbox_op: OutboxOperation | None,
     ) -> None:
+        # Auto-provision tenant partitions on first write for Tier-0 zero-config apps
+        if ctx.tenant_id not in self._provisioned_tenants:
+            pool = await self._get_pool()
+            async with pool.acquire() as pconn:
+                await pconn.execute(
+                    "SELECT provision_tenant_memory_partitions($1)", ctx.tenant_id
+                )
+            self._provisioned_tenants.add(ctx.tenant_id)
+
         async with self._rls_tx(ctx) as conn:
             for ep in episodes:
                 await conn.execute(

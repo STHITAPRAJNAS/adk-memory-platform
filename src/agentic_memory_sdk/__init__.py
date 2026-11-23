@@ -96,11 +96,15 @@ from .ports import (
     RegistryStoreAdapter,
 )
 from .security import (
+    ApiRateLimiter,
     AuthPolicyConfig,
     AuthPrincipal,
     MemoryObservability,
     MemoryRole,
+    get_current_principal,
     mint_hs256_jwt,
+    reset_current_principal,
+    set_current_principal,
     verify_hs256_jwt,
 )
 from .server import MemoryMcpServerTools, create_mcp_server, create_memory_platform_app
@@ -138,7 +142,11 @@ __all__ = [
     "MemoryRole",
     "AuthPrincipal",
     "AuthPolicyConfig",
+    "ApiRateLimiter",
     "MemoryObservability",
+    "get_current_principal",
+    "set_current_principal",
+    "reset_current_principal",
     "mint_hs256_jwt",
     "verify_hs256_jwt",
     "CloudAuthProvider",

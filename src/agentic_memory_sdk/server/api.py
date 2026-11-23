@@ -16,7 +16,13 @@ from ..models import (
     ReasoningTraceStep,
 )
 from ..ontology_loader import DomainPackLoader
-from ..security import AuthPolicyConfig
+from ..security import (
+    ApiRateLimiter,
+    AuthPolicyConfig,
+    MemoryRole,
+    reset_current_principal,
+    set_current_principal,
+)
 from ..service import CompositeMemoryService, Event, types
 from .mcp_server import MemoryMcpServerTools, create_mcp_server
 from .ui_console import CONSOLE_HTML
@@ -214,7 +220,7 @@ def create_memory_platform_app(
     try:
         _api_version = _pkg_version("agentic-composite-memory")
     except PackageNotFoundError:
-        _api_version = "0.2.2"
+        _api_version = "0.3.0"
 
     app = FastAPI(
         title="ADK Enterprise Composite Memory Platform API",
@@ -590,7 +596,21 @@ def create_memory_platform_app(
     # ------------------------------------------------------------------------
     # ENTERPRISE AUTHENTICATION, RBAC & TENANT-ISOLATION MIDDLEWARE
     # ------------------------------------------------------------------------
+    @app.exception_handler(PermissionError)
+    async def permission_error_handler(_request: Request, exc: PermissionError):
+        service.observability.inc("tenant_isolation_denied")
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
+
     if auth_policy is not None and auth_policy.enabled:
+        _redis_rl_client = getattr(service.playbook_adapter, "_redis", None)
+        api_rate_limiter = (
+            ApiRateLimiter(
+                default_rpm=auth_policy.api_rate_limit_rpm,
+                redis_client=_redis_rl_client,
+            )
+            if auth_policy.api_rate_limit_rpm is not None
+            else None
+        )
 
         @app.middleware("http")
         async def auth_and_rbac_middleware(request: Request, call_next: Any):
@@ -601,13 +621,24 @@ def create_memory_platform_app(
                 principal = await auth_policy.authenticate(
                     request.headers.get("authorization"),
                     request.headers.get("x-api-key"),
+                    headers=request.headers,
                 )
             except PermissionError as exc:
                 service.observability.inc("auth_denied")
                 return JSONResponse(status_code=401, content={"detail": str(exc)})
 
+            # Optional per-principal API rate limiting (429 Too Many Requests; Redis-backed if configured)
+            if api_rate_limiter is not None:
+                rl_key = f"{principal.tenant_id}:{principal.subject}"
+                if not await api_rate_limiter.async_check_and_record(rl_key):
+                    service.observability.inc("rate_limit_denied")
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": f"Rate limit exceeded for '{principal.subject}'"},
+                    )
+
             # Parse JSON body once for mutating requests to enforce RBAC & tenant/scope isolation
-            # across query params, path params, top-level body, and MCP tool arguments.
+            # across query params, path params, top-level body, and MCP tool/resource calls.
             parsed_body: dict[str, Any] | None = None
             if request.method in ("POST", "PUT", "PATCH", "DELETE"):
                 body_bytes = await request.body()
@@ -619,17 +650,23 @@ def create_memory_platform_app(
                     except Exception:
                         parsed_body = None
 
-            # 1. Determine required RBAC role (route-level AND MCP tool-level)
+            # 1. Determine required RBAC role & global-admin requirement
             required_role = auth_policy.required_role_for_route(request.method, path)
+            requires_global_admin = auth_policy.is_global_admin_route(path)
             mcp_tool_name: str | None = None
             mcp_args: dict[str, Any] | None = None
+            mcp_resource_uri: str | None = None
+
             if path.rstrip("/") == "/v1/mcp/call" and isinstance(parsed_body, dict):
                 mcp_tool_name = str(parsed_body.get("tool_name", "") or "")
                 if isinstance(parsed_body.get("arguments"), dict):
                     mcp_args = parsed_body["arguments"]
                 if mcp_tool_name:
                     required_role = auth_policy.required_role_for_mcp_tool(mcp_tool_name)
-            elif path.startswith("/mcp/http") and isinstance(parsed_body, dict):
+                    requires_global_admin = requires_global_admin or auth_policy.is_global_admin_mcp_tool(
+                        mcp_tool_name
+                    )
+            elif (path.startswith("/mcp/http") or path.startswith("/mcp/sse")) and isinstance(parsed_body, dict):
                 rpc_method = str(parsed_body.get("method", "") or "")
                 rpc_params = parsed_body.get("params") if isinstance(parsed_body.get("params"), dict) else {}
                 if rpc_method == "tools/call":
@@ -638,6 +675,11 @@ def create_memory_platform_app(
                         mcp_args = rpc_params["arguments"]
                     if mcp_tool_name:
                         required_role = auth_policy.required_role_for_mcp_tool(mcp_tool_name)
+                        requires_global_admin = requires_global_admin or auth_policy.is_global_admin_mcp_tool(
+                            mcp_tool_name
+                        )
+                elif rpc_method == "resources/read":
+                    mcp_resource_uri = str(rpc_params.get("uri", "") or "")
 
             if not principal.has_role(required_role):
                 service.observability.inc("rbac_denied")
@@ -648,8 +690,18 @@ def create_memory_platform_app(
                         f"(caller '{principal.subject}' has {[r.value for r in principal.roles]})"
                     },
                 )
+            if requires_global_admin and not (
+                principal.has_role(MemoryRole.PLATFORM_ADMIN) and principal.tenant_id == "*"
+            ):
+                service.observability.inc("rbac_denied")
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": "Forbidden: global cross-tenant operation requires PLATFORM_ADMIN with tenant_id='*'"
+                    },
+                )
 
-            # 2. Collect ALL scope candidates (query, path, body, MCP arguments) and check EVERY one
+            # 2. Collect ALL scope candidates (query, path, body, MCP arguments, MCP resource URI)
             q_tenant = request.query_params.get("tenant_id")
             q_app = request.query_params.get("app_name")
             q_user = request.query_params.get("user_id")
@@ -699,7 +751,7 @@ def create_memory_platform_app(
             ):
                 scope_checks.append((None, path_parts[3], None))
 
-            # MCP tool arguments scope (`/v1/mcp/call` and `/mcp/http` tools/call)
+            # MCP tool arguments scope (`/v1/mcp/call`, `/mcp/http`, `/mcp/sse`)
             if isinstance(mcp_args, dict):
                 scope_checks.append(
                     (
@@ -708,6 +760,12 @@ def create_memory_platform_app(
                         str(mcp_args["user_id"]) if mcp_args.get("user_id") is not None else None,
                     )
                 )
+
+            # MCP resource URI scope (`memory://apps/{tenant_id}/{app_name}/tbox`)
+            if mcp_resource_uri and mcp_resource_uri.startswith("memory://apps/"):
+                uri_parts = mcp_resource_uri[len("memory://apps/") :].strip("/").split("/")
+                if len(uri_parts) >= 2:
+                    scope_checks.append((uri_parts[0], uri_parts[1], None))
 
             try:
                 for t_val, a_val, u_val in scope_checks:
@@ -723,7 +781,11 @@ def create_memory_platform_app(
                 return JSONResponse(status_code=403, content={"detail": str(exc)})
 
             request.state.principal = principal
-            return await call_next(request)
+            ctx_token = set_current_principal(principal)
+            try:
+                return await call_next(request)
+            finally:
+                reset_current_principal(ctx_token)
 
     # ------------------------------------------------------------------------
     # MEMORY INSPECTOR, REVISIONS, WORKING BLOCKS, OBSERVABILITY & CONSOLE UI
@@ -731,7 +793,7 @@ def create_memory_platform_app(
     @app.get("/ui", response_class=HTMLResponse)
     async def governance_console_ui() -> HTMLResponse:
         """Serves the bundled Visual Memory & Ontology Governance Console UI."""
-        return HTMLResponse(content=CONSOLE_HTML)
+        return HTMLResponse(content=CONSOLE_HTML.replace("{{VERSION}}", _api_version))
 
     @app.get("/v1/memory/items")
     async def list_memory_items(

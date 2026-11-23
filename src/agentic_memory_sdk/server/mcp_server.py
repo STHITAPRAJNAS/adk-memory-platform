@@ -12,7 +12,26 @@ from ..models import (
     RelationRule,
 )
 from ..ontology_loader import DomainPackLoader
+from ..security import AuthPolicyConfig, MemoryRole, get_current_principal
 from ..service import CompositeMemoryService, Event, types
+
+
+def _enforce_mcp_tool_rbac(tool_name: str) -> None:
+    """Enforces per-tool RBAC and global-admin checks inside MCP tool handlers (covers /mcp/sse & /mcp/http)."""
+    principal = get_current_principal()
+    if principal is None:
+        return
+    required = AuthPolicyConfig.required_role_for_mcp_tool(tool_name)
+    if not principal.has_role(required):
+        raise PermissionError(
+            f"Forbidden: MCP tool '{tool_name}' requires role '{required.value}'"
+        )
+    if AuthPolicyConfig.is_global_admin_mcp_tool(tool_name) and not (
+        principal.has_role(MemoryRole.PLATFORM_ADMIN) and principal.tenant_id == "*"
+    ):
+        raise PermissionError(
+            f"Forbidden: global MCP tool '{tool_name}' requires PLATFORM_ADMIN with tenant_id='*'"
+        )
 
 
 class MemoryMcpServerTools:
@@ -358,6 +377,7 @@ class MemoryMcpServerTools:
         min_overflow_confidence: float = 0.55,
     ) -> dict[str, Any]:
         """Runs sleep-time batch extraction, session compaction, overflow edge pruning, and entity dossier synthesis."""
+        _enforce_mcp_tool_rbac("run_memory_maintenance")
         stats = await self.service.run_memory_maintenance(
             min_episodes_to_compact=min_episodes_to_compact,
             min_overflow_confidence=min_overflow_confidence,
@@ -396,6 +416,7 @@ class MemoryMcpServerTools:
         user_id: str,
     ) -> dict[str, Any]:
         """Executes a cascading GDPR Right-to-be-Forgotten purge across Episodic and Graph tiers."""
+        _enforce_mcp_tool_rbac("purge_user_lineage")
         purged_ids = await self.service.purge_user_lineage(
             app_name=app_name, user_id=user_id
         )
@@ -819,7 +840,16 @@ def create_mcp_server(
             mime_type="application/json",
         )
         def resource_ontology_audit_log() -> str:
+            principal = get_current_principal()
             entries = [e.model_dump() for e in tools.registrar.audit_log]
+            if principal is not None and not (
+                principal.has_role(MemoryRole.PLATFORM_ADMIN) and principal.tenant_id == "*"
+            ):
+                entries = [
+                    e
+                    for e in entries
+                    if e.get("tenant_id") in (principal.tenant_id, "platform")
+                ]
             return json.dumps({"audit_count": len(entries), "entries": entries}, indent=2)
 
         @mcp.resource(
@@ -830,6 +860,15 @@ def create_mcp_server(
             mime_type="application/json",
         )
         async def resource_app_tbox(tenant_id: str, app_name: str) -> str:
+            principal = get_current_principal()
+            if principal is not None and not (
+                principal.has_role(MemoryRole.PLATFORM_ADMIN) and principal.tenant_id == "*"
+            ):
+                if tenant_id != principal.tenant_id:
+                    raise PermissionError(
+                        f"Tenant isolation violation: principal tenant '{principal.tenant_id}' "
+                        f"cannot read resource for tenant '{tenant_id}'"
+                    )
             data = await tools.inspect_platform_governance(
                 app_name=f"{tenant_id}:{app_name}"
             )

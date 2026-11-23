@@ -5,6 +5,26 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-23
+
+### Breaking Changes
+- **Removed `--jwt-secret` and `--admin-api-key` CLI flags from `adk-memory serve-api`**: Secrets passed on the command line are exposed in OS process listings (`ps` / `top`). Configure secrets strictly via environment variables (`MEMORY_JWT_SECRET`, `MEMORY_ADMIN_API_KEY`, `MEMORY_AGENT_API_KEY`, `MEMORY_API_KEYS_JSON`).
+- **Minimum JWT Secret Length**: `AuthPolicyConfig(enabled=True, jwt_secret=...)` now requires a secret of at least **32 bytes**.
+
+### Security
+- **Service-Layer `AuthPrincipal` Enforcement (Tenant, App & User Isolation)**: Propagated the authenticated `AuthPrincipal` via `contextvars` (`get_current_principal` / `set_current_principal`) into `CompositeMemoryService` and MCP tool/resource handlers:
+  - Bare `app_name` values (without `tenant:` prefix) resolve to the caller's own `tenant_id` instead of falling back to `default_tenant_id` (`t1`).
+  - Unfiltered `GET /v1/memory/revisions` always scopes to the caller's `tenant_id` (and `allowed_users`).
+  - `allowed_users` is enforced directly inside `CompositeMemoryService` across all user-scoped methods (closing `/mcp/sse` and direct-call bypasses).
+  - MCP resource reads (`memory://apps/{tenant_id}/{app_name}/tbox`, `memory://audit/ontology`) and `/mcp/sse` tool calls enforce tenant isolation and per-tool RBAC directly inside `mcp_server.py`.
+  - Global cross-tenant routes (`/v1/maintenance/run`, `/v1/outbox/flush`, MCP `run_memory_maintenance`) now require `PLATFORM_ADMIN` with `tenant_id == "*"`.
+  - `READER` principals can now list MCP tools/resources/prompts and invoke read-only MCP tools over `/mcp/http` and `/mcp/sse`.
+- **Bounded & Redis-Backed Distributed API Rate Limiting**: Added `ApiRateLimiter` (`AuthPolicyConfig(api_rate_limit_rpm=...)`, returning `429`) with bounded key eviction (`max_keys=10_000`) and automatic Redis `INCR`/`EXPIRE` backing when Redis is configured.
+
+### Added
+- **Bring-Your-Own-Auth (BYOA) Request-Header Hook**: Added `AuthPolicyConfig.custom_request_authenticator(headers)` for API Gateways, Istio/Envoy mTLS, Kong, Apigee, and Cloud IAP trusted-header authentication alongside `custom_token_verifier(token)` and exported `set_current_principal` / `reset_current_principal` for embedded SDK callers.
+- **`adk-memory migrate-db` CLI command**: Idempotent schema upgrade path for existing PostgreSQL deployments (provisions `platform_app_user` login, `memory_revisions`, `working_memory_blocks`, and RLS policies without wiping volumes).
+
 ## [0.2.2] - 2026-11-23
 
 ### Security (Critical & High Fixes)
@@ -45,8 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `AuthPolicyConfig`, `AuthPrincipal`, `MemoryRole` (`READER`, `AGENT`, `ONTOLOGY_STEWARD`, `COMPLIANCE_ADMIN`, `PLATFORM_ADMIN`), `mint_hs256_jwt`, `verify_hs256_jwt`, and `MemoryObservability` (OpenTelemetry auto-detection + `GET /v1/metrics` JSON + `GET /metrics` Prometheus text format).
 - **Bundled Visual Memory & Ontology Governance Console UI (`GET /ui`)**:
   - Self-contained interactive SPA served directly by FastAPI (`server/ui_console.py`) for inspecting/editing/deleting user memories, managing Working Memory Blocks, auditing Memory Revisions, certifying/evolving Domain Packs, and monitoring live metrics.
-- **LoCoMo / LongMemEval-Style Standardized Evaluation Harness (`examples/locomo_longmemeval_harness.py`)**:
-  - Runnable 6-category benchmark harness supporting `--mode deterministic`, `--mode gemini`, `--mode openai`, and `--mode ollama`.
+- **Synthetic 6-Category Memory Evaluation Harness (`examples/locomo_longmemeval_harness.py`)**:
+  - Lightweight 6-scenario synthetic check covering LoCoMo/LongMemEval-inspired reasoning categories (not the official external datasets), supporting `--mode deterministic`, `--mode gemini`, `--mode openai`, and `--mode ollama`.
 
 ## [0.1.7] - 2026-11-21
 

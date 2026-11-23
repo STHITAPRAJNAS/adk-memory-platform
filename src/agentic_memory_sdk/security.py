@@ -10,16 +10,40 @@ cloud-agnostic and requiring zero mandatory third-party dependencies.
 from __future__ import annotations
 
 import base64
-from collections import defaultdict
+from collections import defaultdict, deque
+import contextvars
 from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
 import hmac
 import json
 import time
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 
 from pydantic import BaseModel, Field
+
+MIN_JWT_SECRET_BYTES = 32
+
+_CURRENT_PRINCIPAL: contextvars.ContextVar["AuthPrincipal | None"] = contextvars.ContextVar(
+    "adk_memory_current_principal", default=None
+)
+
+
+def get_current_principal() -> "AuthPrincipal | None":
+    """Returns the authenticated `AuthPrincipal` bound to the current async request context."""
+    return _CURRENT_PRINCIPAL.get()
+
+
+def set_current_principal(
+    principal: "AuthPrincipal | None",
+) -> contextvars.Token["AuthPrincipal | None"]:
+    """Binds an authenticated `AuthPrincipal` into the current async context."""
+    return _CURRENT_PRINCIPAL.set(principal)
+
+
+def reset_current_principal(token: contextvars.Token["AuthPrincipal | None"]) -> None:
+    """Restores the previous `AuthPrincipal` context after request completion."""
+    _CURRENT_PRINCIPAL.reset(token)
 
 
 class MemoryRole(str, Enum):
@@ -146,15 +170,38 @@ class AuthPolicyConfig:
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
     enforce_tenant_isolation: bool = True
-    public_paths: tuple[str, ...] = ("/health", "/docs", "/openapi.json", "/redoc", "/ui")
+    api_rate_limit_rpm: int | None = None
+    public_paths: tuple[str, ...] = ("/health", "/healthz", "/docs", "/openapi.json", "/redoc", "/ui")
     custom_token_verifier: Callable[[str], Awaitable[AuthPrincipal | None]] | None = None
+    custom_request_authenticator: Callable[[Mapping[str, str]], Awaitable[AuthPrincipal | None]] | None = None
+
+    def __post_init__(self) -> None:
+        if self.enabled and self.jwt_secret is not None:
+            if len(self.jwt_secret.encode("utf-8")) < MIN_JWT_SECRET_BYTES:
+                raise ValueError(
+                    f"JWT secret must be at least {MIN_JWT_SECRET_BYTES} bytes long "
+                    f"(got {len(self.jwt_secret.encode('utf-8'))} bytes)"
+                )
 
     async def authenticate(
         self,
         authorization_header: str | None,
         api_key_header: str | None,
+        headers: Mapping[str, str] | None = None,
     ) -> AuthPrincipal:
-        """Resolves an `AuthPrincipal` from `X-API-Key` or `Authorization: Bearer ...`."""
+        """
+        Resolves an `AuthPrincipal` via Bring-Your-Own-Auth hooks or built-in adapters:
+          1. `custom_request_authenticator(headers)` — for API Gateways, Istio/Envoy mTLS, Kong, Apigee, Cloud IAP.
+          2. Static `api_keys` registry (`X-API-Key` or `Authorization: Bearer`).
+          3. `custom_token_verifier(token)` — for Okta, Entra ID, Auth0, Cognito OIDC/JWKS tokens.
+          4. Built-in HS256 JWT verification (`jwt_secret` >= 32 bytes).
+        """
+        # 0. Bring-Your-Own-Auth request-header authenticator (e.g. Istio mTLS / Kong / Cloud IAP)
+        if self.custom_request_authenticator is not None and headers is not None:
+            principal = await self.custom_request_authenticator(headers)
+            if principal is not None:
+                return principal
+
         token: str | None = None
         if api_key_header:
             token = api_key_header.strip()
@@ -255,10 +302,22 @@ class AuthPolicyConfig:
         )
 
     @staticmethod
+    def is_global_admin_route(path: str) -> bool:
+        """Routes that operate across ALL tenants require a global PLATFORM_ADMIN (`tenant_id == '*'`)."""
+        p = path.lower().rstrip("/")
+        return p.endswith("/v1/maintenance/run") or p.endswith("/v1/outbox/flush")
+
+    @staticmethod
+    def is_global_admin_mcp_tool(tool_name: str) -> bool:
+        return tool_name.strip().lower() == "run_memory_maintenance"
+
+    @staticmethod
     def required_role_for_mcp_tool(tool_name: str) -> MemoryRole:
         """Maps every MCP tool name to its minimum required RBAC role."""
         name = tool_name.strip().lower()
-        if name in ("purge_user_lineage", "run_memory_maintenance"):
+        if name == "run_memory_maintenance":
+            return MemoryRole.PLATFORM_ADMIN
+        if name == "purge_user_lineage":
             return MemoryRole.COMPLIANCE_ADMIN
         if name in (
             "register_domain_pack",
@@ -292,8 +351,11 @@ class AuthPolicyConfig:
         """Maps actual FastAPI HTTP routes to minimum required RBAC role."""
         m = method.upper()
         p = path.lower().rstrip("/")
+        # Global cross-tenant operations require PLATFORM_ADMIN (with tenant_id == '*')
+        if p.endswith("/v1/maintenance/run") or p.endswith("/v1/outbox/flush"):
+            return MemoryRole.PLATFORM_ADMIN
         # Compliance & destructive lifecycle routes
-        if p.endswith("/v1/lineage/purge") or p.endswith("/v1/memory/purge") or p.endswith("/v1/maintenance/run"):
+        if p.endswith("/v1/lineage/purge") or p.endswith("/v1/memory/purge"):
             return MemoryRole.COMPLIANCE_ADMIN
         if "/v1/memory/items" in p and m in ("PUT", "PATCH", "DELETE"):
             return MemoryRole.COMPLIANCE_ADMIN
@@ -308,6 +370,10 @@ class AuthPolicyConfig:
             )
         ):
             return MemoryRole.READER if m == "GET" else MemoryRole.ONTOLOGY_STEWARD
+        # MCP transport endpoints: READER may list tools/resources/prompts & invoke read-only tools;
+        # mutating MCP tools escalate via `required_role_for_mcp_tool` in middleware & tool handlers.
+        if p.startswith("/mcp/http") or p.startswith("/mcp/sse") or p == "/v1/mcp/call":
+            return MemoryRole.READER
         # Explicitly read-only POST query routes
         if p.endswith("/v1/memory/search") or p.endswith("/v1/memory/check-answerable"):
             return MemoryRole.READER
@@ -319,7 +385,6 @@ class AuthPolicyConfig:
                 "/v1/memory/blocks",
                 "/v1/traces",
                 "/v1/playbooks",
-                "/v1/outbox/flush",
             )
         ):
             return MemoryRole.READER if m == "GET" else MemoryRole.AGENT
@@ -359,6 +424,73 @@ class AuthPolicyConfig:
                 raise PermissionError(
                     f"User scope violation: principal '{principal.subject}' not allowed on user '{target_user_id}'"
                 )
+
+
+class ApiRateLimiter:
+    """
+    Bounded sliding-window per-principal / per-client API rate limiter (returns 429 when exceeded).
+    - Evicts expired keys and caps memory at `max_keys` (default 10,000) so key tables never grow unbounded.
+    - When `redis_client` is provided, uses atomic Redis `INCR` + `EXPIRE` for cross-pod distributed limiting.
+    """
+
+    def __init__(
+        self,
+        default_rpm: int = 600,
+        window_sec: float = 60.0,
+        max_keys: int = 10_000,
+        redis_client: Any = None,
+    ):
+        self.default_rpm = default_rpm
+        self.window_sec = window_sec
+        self.max_keys = max_keys
+        self.redis_client = redis_client
+        self._hits: dict[str, deque[float]] = {}
+
+    def _prune_stale_keys(self, now: float) -> None:
+        if len(self._hits) < self.max_keys:
+            return
+        stale = [k for k, q in self._hits.items() if not q or (now - q[-1]) > self.window_sec]
+        for k in stale:
+            del self._hits[k]
+        # If still at capacity, drop oldest-seen keys (FIFO)
+        while len(self._hits) >= self.max_keys:
+            oldest_key = next(iter(self._hits))
+            del self._hits[oldest_key]
+
+    def check_and_record(self, key: str, max_rpm: int | None = None) -> bool:
+        limit = max_rpm if max_rpm is not None else self.default_rpm
+        now = time.monotonic()
+        q = self._hits.get(key)
+        if q is not None:
+            while q and (now - q[0]) > self.window_sec:
+                q.popleft()
+            if not q:
+                del self._hits[key]
+                q = None
+        if q is None:
+            self._prune_stale_keys(now)
+            q = deque()
+            self._hits[key] = q
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        return True
+
+    async def async_check_and_record(self, key: str, max_rpm: int | None = None) -> bool:
+        """Uses Redis fixed-window atomic counter when `redis_client` is available, else bounded in-memory."""
+        limit = max_rpm if max_rpm is not None else self.default_rpm
+        if self.redis_client is not None:
+            try:
+                bucket = int(time.time() // max(1.0, self.window_sec))
+                rkey = f"adk_mem:rl:{key}:{bucket}"
+                count = await self.redis_client.incr(rkey)
+                if count == 1:
+                    await self.redis_client.expire(rkey, int(self.window_sec) + 2)
+                return int(count) <= limit
+            except Exception:
+                # Fail open to local bounded limiter if Redis is transiently unreachable
+                pass
+        return self.check_and_record(key, max_rpm=limit)
 
 
 class MemoryObservability:

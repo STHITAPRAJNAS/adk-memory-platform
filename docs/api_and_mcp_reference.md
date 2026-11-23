@@ -33,6 +33,10 @@ Every Data-Plane, Control-Plane, Playbook, and Maintenance capability is accessi
 | **Flush Transactional Outbox** | `service.process_outbox_batch(...)` | `POST /v1/outbox/flush` | *(Automatic background worker + `run_memory_maintenance`)* |
 | **Ontology Audit Provenance Log** | `registrar.audit_log` | `GET /v1/audit/ontology` | Resource: `memory://audit/ontology` |
 | **GDPR Right-to-be-Forgotten Purge** | `service.purge_user_lineage(...)` | `POST /v1/lineage/purge` | Tool: `purge_user_lineage` |
+| **Inspect / Edit / Delete Memories** | `service.list_user_memories(...)` / `edit_user_memory(...)` | `GET/PUT/DELETE /v1/memory/items` | Tool: `list_user_memories` |
+| **Immutable Memory Revisions** | `service.async_get_memory_revisions(...)` | `GET /v1/memory/revisions` | Tool: `get_memory_revisions` |
+| **Letta-Style Working Memory Blocks** | `service.async_upsert_working_memory_block(...)` | `GET/POST /v1/memory/blocks` | Tool: `edit_working_memory_block` |
+| **Visual Governance Console & Metrics** | `service.observability.snapshot()` | `GET /ui`, `GET /v1/metrics`, `GET /metrics` | — |
 
 ---
 
@@ -41,17 +45,18 @@ Every Data-Plane, Control-Plane, Playbook, and Maintenance capability is accessi
 ### CLI (`adk-memory`)
 
 ```bash
-# 1. Start the unified FastAPI REST + MCP Server (default port 8095, zero-config in-memory mode)
-adk-memory serve-api --host 0.0.0.0 --port 8095 --mode in_memory
+# 1. Start the unified FastAPI REST + MCP + Console UI Server (loopback dev, in-memory)
+adk-memory serve-api --host 127.0.0.1 --port 8095 --backend memory
 
-# 2. Start in production mode (reads ADK_* environment variables below)
-adk-memory serve-api --host 0.0.0.0 --port 8095 --mode production
+# 2. Start in production/Docker mode on 0.0.0.0 (pass secrets strictly via env vars, never CLI args)
+MEMORY_JWT_SECRET="replace-with-32-plus-byte-random-secret" \
+  adk-memory serve-api --host 0.0.0.0 --port 8095 --backend docker --enable-maintenance-worker
 
 # 3. Start standalone MCP server over stdio (for Claude Desktop / Cursor / Windsurf / local MCP hosts)
-adk-memory serve-mcp --mode in_memory
+adk-memory serve-mcp --backend memory
 
-# 4. Register a Domain Pack (.json or .ttl) via CLI
-adk-memory register-domain --tenant-id acme --file examples/domain_packs/sre_incident_ops.json
+# 4. Initialize or idempotently migrate PostgreSQL + pgvector RLS schema (adds platform_app_user, revisions & blocks)
+adk-memory migrate-db --dsn postgresql://platform_admin:platform_secret@127.0.0.1:5433/adk_memory_platform
 ```
 
 ### Environment Variables (`agentic_memory_sdk/server/main.py`)
@@ -409,8 +414,8 @@ curl -X POST http://localhost:8095/v1/mcp/call \
         "agentic-composite-memory",
         "adk-memory",
         "serve-mcp",
-        "--mode",
-        "in_memory"
+        "--backend",
+        "memory"
       ]
     }
   }

@@ -60,7 +60,7 @@ CONSOLE_HTML = """<!DOCTYPE html>
 <body>
   <header>
     <div>
-      <h1>Agentic Composite Memory Console <span class="badge b-blue">v0.2.0</span></h1>
+      <h1>Agentic Composite Memory Console <span class="badge b-blue">v{{VERSION}}</span></h1>
       <div class="muted">3-Tier Ontology-Grounded Memory Inspector · Revisions · Working Blocks · Governance Steward</div>
     </div>
     <div class="controls">

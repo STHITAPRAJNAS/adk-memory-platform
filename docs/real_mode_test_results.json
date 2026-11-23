@@ -1,5 +1,5 @@
 {
-  "verified_at": "2026-11-21T17:29:28Z",
+  "verified_at": "2026-11-23T18:25:06Z",
   "surfaces_verified": [
     "1. Google ADK A2A Multi-Agent Mesh (:8090 platform_concierge -> :8091 sre_specialist & :8092 crm_specialist)",
     "2. Centralized FastAPI Memory Platform API (:8095 /v1/apps/register, /v1/memory/*, /v1/domains/packs/review, /v1/maintenance/run, /v1/audit/ontology)",
@@ -47,38 +47,48 @@
           "domain:t1:customer_crm"
         ],
         "write_namespace": "domain:t1:customer_crm"
+      },
+      {
+        "tenant_id": "t1",
+        "app_name": "pg_only_sre",
+        "read_namespaces": [
+          "app:t1:pg_only_sre",
+          "global:t1:core",
+          "domain:t1:sre_infra"
+        ],
+        "write_namespace": "domain:t1:sre_infra"
       }
     ],
     "episodic_memories": [
       {
-        "episode_id": "69cef892-4900-4869-913c-152517e0afb1",
+        "episode_id": "638e3920-5d4c-4d5b-8ac4-4676b8e1e023",
         "tenant_id": "t1",
         "app_name": "sre_specialist",
         "user_id": "sre_operator",
         "namespace": "app:t1:sre_specialist",
         "author": "sre_specialist",
         "content_text": "Remember: checkout-api is deployed in us-east-1 and reads from aurora-payments-01",
-        "created_at": "2026-11-21T17:29:21.776517+00:00"
+        "created_at": "2026-11-23T18:25:01.380495+00:00"
       },
       {
-        "episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440",
+        "episode_id": "5abf5f41-f977-4588-beef-ec702a8f3891",
         "tenant_id": "t1",
         "app_name": "sre_specialist",
         "user_id": "sre_operator",
         "namespace": "app:t1:sre_specialist",
         "author": "sre_specialist",
         "content_text": "Remember: We failed checkout-api over to us-west-2 using experimental-chaos-mesh",
-        "created_at": "2026-11-21T17:29:24.844828+00:00"
+        "created_at": "2026-11-23T18:25:02.957417+00:00"
       },
       {
-        "episode_id": "770146bc-c91b-45d1-b08d-0990f22c4232",
+        "episode_id": "b5dac925-fdba-4b33-ba8e-198ce95fe9d2",
         "tenant_id": "t1",
         "app_name": "crm_specialist",
         "user_id": "crm_account_exec",
         "namespace": "app:t1:crm_specialist",
         "author": "crm_specialist",
         "content_text": "Remember: Acme-Corp upgraded to Enterprise-Platinum",
-        "created_at": "2026-11-21T17:29:26.961054+00:00"
+        "created_at": "2026-11-23T18:25:04.498523+00:00"
       }
     ],
     "graph_seed_index": [
@@ -180,31 +190,10 @@
       },
       {
         "vertex_id": null,
-        "name": "aurora-payments-01",
-        "entity_class": "DatabaseCluster",
-        "namespace": "domain:t1:sre_infra",
-        "summary": "Primary Aurora PostgreSQL cluster for checkout"
-      },
-      {
-        "vertex_id": null,
         "name": "checkout-api",
         "entity_class": "Microservice",
         "namespace": "domain:t1:sre_infra",
         "summary": "Core checkout payment microservice (failed over to us-west-2)"
-      },
-      {
-        "vertex_id": null,
-        "name": "checkout-api",
-        "entity_class": "Microservice",
-        "namespace": "domain:t1:sre_infra",
-        "summary": "Core checkout payment microservice (failed over to us-west-2)"
-      },
-      {
-        "vertex_id": null,
-        "name": "us-east-1",
-        "entity_class": "CloudRegion",
-        "namespace": "domain:t1:sre_infra",
-        "summary": "AWS US East N. Virginia region"
       },
       {
         "vertex_id": null,
@@ -230,17 +219,7 @@
         "t_valid": "2026-01-15T00:00:00Z",
         "t_invalid": "ACTIVE",
         "confidence": 0.98,
-        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
-      },
-      {
-        "source": "checkout-api",
-        "predicate": "READS_FROM",
-        "target": "aurora-payments-01",
-        "namespace": "domain:t1:sre_infra",
-        "t_valid": "2026-01-15T00:00:00Z",
-        "t_invalid": "ACTIVE",
-        "confidence": 0.98,
-        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+        "source_episode_id": "638e3920-5d4c-4d5b-8ac4-4676b8e1e023"
       },
       {
         "source": "checkout-api",
@@ -250,57 +229,7 @@
         "t_valid": "2026-01-15T00:00:00Z",
         "t_invalid": "2026-11-01T00:00:00Z",
         "confidence": 0.98,
-        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
-      },
-      {
-        "source": "checkout-api",
-        "predicate": "DEPLOYED_IN_PRIMARY",
-        "target": "us-east-1",
-        "namespace": "domain:t1:sre_infra",
-        "t_valid": "2026-01-15T00:00:00Z",
-        "t_invalid": "2026-11-01T00:00:00Z",
-        "confidence": 0.98,
-        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
-      },
-      {
-        "source": "checkout-api",
-        "predicate": "READS_FROM",
-        "target": "aurora-payments-01",
-        "namespace": "domain:t1:sre_infra",
-        "t_valid": "2026-01-15T00:00:00Z",
-        "t_invalid": "ACTIVE",
-        "confidence": 0.98,
-        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
-      },
-      {
-        "source": "checkout-api",
-        "predicate": "READS_FROM",
-        "target": "aurora-payments-01",
-        "namespace": "domain:t1:sre_infra",
-        "t_valid": "2026-01-15T00:00:00Z",
-        "t_invalid": "ACTIVE",
-        "confidence": 0.98,
-        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
-      },
-      {
-        "source": "checkout-api",
-        "predicate": "DEPLOYED_IN_PRIMARY",
-        "target": "us-east-1",
-        "namespace": "domain:t1:sre_infra",
-        "t_valid": "2026-01-15T00:00:00Z",
-        "t_invalid": "2026-11-01T00:00:00Z",
-        "confidence": 0.98,
-        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
-      },
-      {
-        "source": "checkout-api",
-        "predicate": "DEPLOYED_IN_PRIMARY",
-        "target": "us-east-1",
-        "namespace": "domain:t1:sre_infra",
-        "t_valid": "2026-01-15T00:00:00Z",
-        "t_invalid": "2026-11-01T00:00:00Z",
-        "confidence": 0.98,
-        "source_episode_id": "69cef892-4900-4869-913c-152517e0afb1"
+        "source_episode_id": "638e3920-5d4c-4d5b-8ac4-4676b8e1e023"
       },
       {
         "source": "checkout-api",
@@ -310,7 +239,7 @@
         "t_valid": "2026-11-01T00:00:00Z",
         "t_invalid": "ACTIVE",
         "confidence": 0.9,
-        "source_episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440"
+        "source_episode_id": "5abf5f41-f977-4588-beef-ec702a8f3891"
       },
       {
         "source": "checkout-api",
@@ -320,27 +249,7 @@
         "t_valid": "2026-11-01T00:00:00Z",
         "t_invalid": "ACTIVE",
         "confidence": 0.96,
-        "source_episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440"
-      },
-      {
-        "source": "checkout-api",
-        "predicate": "RELATED_TO",
-        "target": "experimental-chaos-mesh",
-        "namespace": "app:t1:sre_specialist",
-        "t_valid": "2026-11-01T00:00:00Z",
-        "t_invalid": "ACTIVE",
-        "confidence": 0.9,
-        "source_episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440"
-      },
-      {
-        "source": "checkout-api",
-        "predicate": "DEPLOYED_IN_PRIMARY",
-        "target": "us-west-2",
-        "namespace": "domain:t1:sre_infra",
-        "t_valid": "2026-11-01T00:00:00Z",
-        "t_invalid": "ACTIVE",
-        "confidence": 0.96,
-        "source_episode_id": "1fbe9a11-64df-44ef-befa-ced3b64ad440"
+        "source_episode_id": "5abf5f41-f977-4588-beef-ec702a8f3891"
       },
       {
         "source": "Acme-Corp",
@@ -350,7 +259,7 @@
         "t_valid": "2026-11-05T00:00:00Z",
         "t_invalid": "ACTIVE",
         "confidence": 0.95,
-        "source_episode_id": "770146bc-c91b-45d1-b08d-0990f22c4232"
+        "source_episode_id": "b5dac925-fdba-4b33-ba8e-198ce95fe9d2"
       }
     ],
     "procedural_reasoning_trace_steps": 2
@@ -370,13 +279,13 @@
         ],
         "resolution_summary": "Standard Route53 + Aurora failover playbook for checkout-api",
         "success_count": 2,
-        "updated_at": "2026-11-21T17:29:28.327162+00:00"
+        "updated_at": "2026-11-23T18:25:05.759713+00:00"
       }
     ]
   },
   "ontology_steward_audit_log": [
     {
-      "audit_id": "aud_21c54d39cf92",
+      "audit_id": "aud_19715663aede",
       "tenant_id": "platform",
       "target_id": "customer_crm@v2.0",
       "action": "REGISTER_DOMAIN_PACK",
@@ -419,10 +328,10 @@
       ],
       "triggered_by": "domain_steward",
       "source_episode_ids": [],
-      "timestamp": "2026-11-21T17:29:12.263778+00:00"
+      "timestamp": "2026-11-23T18:24:55.801598+00:00"
     },
     {
-      "audit_id": "aud_63baddcdbdce",
+      "audit_id": "aud_38b27ee2cc79",
       "tenant_id": "platform",
       "target_id": "clinical_trials@v1.0",
       "action": "REGISTER_DOMAIN_PACK",
@@ -465,10 +374,10 @@
       ],
       "triggered_by": "domain_steward",
       "source_episode_ids": [],
-      "timestamp": "2026-11-21T17:29:12.263778+00:00"
+      "timestamp": "2026-11-23T18:24:55.801598+00:00"
     },
     {
-      "audit_id": "aud_bdf0f31fb49c",
+      "audit_id": "aud_cd0f61400771",
       "tenant_id": "platform",
       "target_id": "retail_omnichannel@1.0.0",
       "action": "REGISTER_DOMAIN_PACK",
@@ -540,10 +449,10 @@
       ],
       "triggered_by": "domain_steward",
       "source_episode_ids": [],
-      "timestamp": "2026-11-21T17:29:12.264781+00:00"
+      "timestamp": "2026-11-23T18:24:55.801598+00:00"
     },
     {
-      "audit_id": "aud_a28e18c3ded2",
+      "audit_id": "aud_ed41a02ce3b3",
       "tenant_id": "platform",
       "target_id": "sre_infra@v1.2",
       "action": "REGISTER_DOMAIN_PACK",
@@ -606,10 +515,10 @@
       ],
       "triggered_by": "domain_steward",
       "source_episode_ids": [],
-      "timestamp": "2026-11-21T17:29:12.264781+00:00"
+      "timestamp": "2026-11-23T18:24:55.801598+00:00"
     },
     {
-      "audit_id": "aud_5da7027ae66d",
+      "audit_id": "aud_e6a134554cba",
       "tenant_id": "platform",
       "target_id": "finops@v1.0",
       "action": "LLM_REVIEW_AND_REFINE",
@@ -637,7 +546,7 @@
       ],
       "triggered_by": "ontology_intelligence_steward",
       "source_episode_ids": [],
-      "timestamp": "2026-11-21T17:29:28.353129+00:00"
+      "timestamp": "2026-11-23T18:25:05.793819+00:00"
     }
   ]
 }

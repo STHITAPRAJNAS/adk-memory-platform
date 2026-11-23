@@ -183,11 +183,49 @@ tools = get_langgraph_memory_tools(
 # Local dev (loopback only)
 adk-memory serve-api --host 127.0.0.1 --port 8095 --backend memory
 
-# Production / public bind (requires auth via --jwt-secret / --admin-api-key or MEMORY_AUTH_ENABLED=true)
-adk-memory serve-api --host 0.0.0.0 --port 8095 --backend docker --jwt-secret "$MEMORY_JWT_SECRET" --enable-maintenance-worker
+# Production / public bind (pass secrets strictly via env vars, never CLI args)
+MEMORY_JWT_SECRET="replace-with-32-plus-byte-random-secret" \
+  adk-memory serve-api --host 0.0.0.0 --port 8095 --backend docker --enable-maintenance-worker
 
 # Or run standalone stdio MCP server for Claude Desktop / Cursor / Windsurf
-adk-memory serve-mcp --mode in_memory
+adk-memory serve-mcp --backend memory
+```
+
+### Bring-Your-Own-Auth (BYOA) for Enterprise IdPs & API Gateways
+The SDK separates **Authentication (AuthN — owned by your org's IdP/gateway)** from **Authorization & Tenant Isolation (AuthZ — enforced inside `CompositeMemoryService`, MCP, and PostgreSQL RLS)**. Plug in any enterprise auth pattern and return an `AuthPrincipal`:
+
+```python
+from agentic_composite_memory import (
+    AuthPolicyConfig, AuthPrincipal, MemoryRole,
+    create_memory_platform_app, set_current_principal, reset_current_principal,
+)
+
+# Pattern A: API Gateway / Istio mTLS / Kong / Cloud IAP trusted headers (no Bearer token needed)
+async def gateway_header_auth(headers):
+    sub, tenant = headers.get("x-auth-subject"), headers.get("x-auth-tenant")
+    if not (sub and tenant):
+        return None
+    return AuthPrincipal(subject=sub, tenant_id=tenant, roles=[MemoryRole.AGENT])
+
+# Pattern B: Okta / Entra ID / Auth0 / Cognito OIDC JWKS token verification
+async def oidc_token_verifier(token: str):
+    claims = await my_jwks_verify(token)
+    return AuthPrincipal(subject=claims["sub"], tenant_id=claims["tid"], roles=[MemoryRole.AGENT])
+
+app = create_memory_platform_app(
+    service,
+    auth_policy=AuthPolicyConfig(
+        enabled=True,
+        custom_request_authenticator=gateway_header_auth,  # or custom_token_verifier=oidc_token_verifier
+    ),
+)
+
+# Pattern C: Embedded SDK inside your own authenticated service
+tok = set_current_principal(AuthPrincipal(subject="svc-1", tenant_id="acme", roles=[MemoryRole.AGENT]))
+try:
+    await service.search_memory(app_name="concierge", user_id="u1", query="...")
+finally:
+    reset_current_principal(tok)
 ```
 
 **Claude Desktop / Cursor / Windsurf `mcpServers` Config (`Streamable HTTP` or `stdio`)**:
@@ -196,7 +234,7 @@ adk-memory serve-mcp --mode in_memory
   "mcpServers": {
     "agentic-composite-memory": {
       "command": "uvx",
-      "args": ["--from", "agentic-composite-memory", "adk-memory", "serve-mcp", "--mode", "in_memory"]
+      "args": ["--from", "agentic-composite-memory", "adk-memory", "serve-mcp", "--backend", "memory"]
     }
   }
 }

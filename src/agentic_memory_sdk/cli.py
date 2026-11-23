@@ -39,17 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     p_api.add_argument(
         "--auth-enabled",
         action="store_true",
-        help="Enforce JWT / API-Key AuthN + RBAC + tenant isolation (sets MEMORY_AUTH_ENABLED=true)",
-    )
-    p_api.add_argument(
-        "--jwt-secret",
-        default=None,
-        help="HS256 JWT signing secret (sets MEMORY_JWT_SECRET and enables auth)",
-    )
-    p_api.add_argument(
-        "--admin-api-key",
-        default=None,
-        help="Bootstrap PLATFORM_ADMIN API key (sets MEMORY_ADMIN_API_KEY and enables auth)",
+        help="Enforce JWT / API-Key AuthN + RBAC + tenant isolation (configure secrets via MEMORY_JWT_SECRET / MEMORY_ADMIN_API_KEY env vars)",
     )
     p_api.add_argument(
         "--allow-insecure-public-bind",
@@ -75,10 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Override MEMORY_BACKEND ('docker' or 'memory')",
     )
 
-    # 3. init-db: Initialize PostgreSQL + pgvector RLS schema and partitions
+    # 3. init-db / migrate-db: Initialize or idempotently upgrade PostgreSQL + pgvector RLS schema
     p_init = sub.add_parser(
         "init-db",
-        help="Initialize PostgreSQL + pgvector RLS tables, partitions, and HNSW indexes",
+        aliases=["migrate-db"],
+        help="Initialize or idempotently migrate PostgreSQL + pgvector RLS tables, roles, and partitions",
     )
     p_init.add_argument(
         "--dsn",
@@ -116,11 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["ENABLE_MAINTENANCE_WORKER"] = "true"
         if args.maintenance_interval_sec is not None:
             os.environ["MAINTENANCE_INTERVAL_SEC"] = str(args.maintenance_interval_sec)
-        if args.jwt_secret:
-            os.environ["MEMORY_JWT_SECRET"] = args.jwt_secret
-        if args.admin_api_key:
-            os.environ["MEMORY_ADMIN_API_KEY"] = args.admin_api_key
-        if args.auth_enabled or args.jwt_secret or args.admin_api_key:
+        if args.auth_enabled:
             os.environ["MEMORY_AUTH_ENABLED"] = "true"
         from .security import AuthPolicyConfig
 
@@ -132,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             print(
                 "ERROR: Refusing to bind to public interface 0.0.0.0 without authentication enabled. "
-                "Pass --jwt-secret / --admin-api-key (or set MEMORY_AUTH_ENABLED=true), "
+                "Set MEMORY_JWT_SECRET (>=32 bytes) or MEMORY_ADMIN_API_KEY in the environment, "
                 "bind to 127.0.0.1, or pass --allow-insecure-public-bind for local testing.",
                 file=sys.stderr,
             )
@@ -157,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         mcp.run(transport=args.transport)
         return 0
 
-    if args.command == "init-db":
+    if args.command in ("init-db", "migrate-db"):
         from .adapters.postgres_pgvector import PostgresPgVectorAdapter
 
         async def _run_init() -> None:

@@ -188,27 +188,23 @@ ALTER TABLE working_memory_blocks FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS memory_revisions_tenant_policy ON memory_revisions;
 CREATE POLICY memory_revisions_tenant_policy ON memory_revisions
     USING (
-        current_setting('app.tenant_id', true) IS NULL
-        OR current_setting('app.tenant_id', true) = ''
-        OR tenant_id = current_setting('app.tenant_id', true)
+        tenant_id = current_setting('app.tenant_id', true)
+        OR current_setting('app.tenant_id', true) = '*'
     )
     WITH CHECK (
-        current_setting('app.tenant_id', true) IS NULL
-        OR current_setting('app.tenant_id', true) = ''
-        OR tenant_id = current_setting('app.tenant_id', true)
+        tenant_id = current_setting('app.tenant_id', true)
+        OR current_setting('app.tenant_id', true) = '*'
     );
 
 DROP POLICY IF EXISTS working_blocks_tenant_policy ON working_memory_blocks;
 CREATE POLICY working_blocks_tenant_policy ON working_memory_blocks
     USING (
-        current_setting('app.tenant_id', true) IS NULL
-        OR current_setting('app.tenant_id', true) = ''
-        OR tenant_id = current_setting('app.tenant_id', true)
+        tenant_id = current_setting('app.tenant_id', true)
+        OR current_setting('app.tenant_id', true) = '*'
     )
     WITH CHECK (
-        current_setting('app.tenant_id', true) IS NULL
-        OR current_setting('app.tenant_id', true) = ''
-        OR tenant_id = current_setting('app.tenant_id', true)
+        tenant_id = current_setting('app.tenant_id', true)
+        OR current_setting('app.tenant_id', true) = '*'
     );
 
 -- Episodic Policy: Strictly isolated to (tenant_id, app_name, user_id)

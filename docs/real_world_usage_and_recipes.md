@@ -100,7 +100,8 @@ Use this pattern in **Kubernetes or multi-container deployments** where 10s or 1
 #### Step 1: Start the Centralized Memory Platform Server
 ```bash
 # Co-hosts both FastAPI REST (/v1/*) and MCP (/mcp/*, /v1/mcp/*) on port 8095
-adk-memory serve-api --host 0.0.0.0 --port 8095 --mode production
+MEMORY_JWT_SECRET="replace-with-32-plus-byte-random-secret" \
+  adk-memory serve-api --host 0.0.0.0 --port 8095 --backend docker
 ```
 
 #### Step 2: Connect Lightweight Agent Pods via `RemoteCompositeMemoryService`
@@ -197,9 +198,9 @@ The platform exposes a full **MCP Server** (`create_mcp_server`) supporting **3 
   "mcpServers": {
     "agentic-composite-memory": {
       "command": "adk-memory",
-      "args": ["serve-mcp", "--mode", "production"],
+      "args": ["serve-mcp", "--backend", "docker"],
       "env": {
-        "POSTGRES_DSN": "postgresql://platform_admin:platform_secret@127.0.0.1:5433/adk_memory_platform",
+        "POSTGRES_DSN": "postgresql://platform_app_user:platform_secret@127.0.0.1:5433/adk_memory_platform",
         "NEO4J_URI": "bolt://127.0.0.1:7687",
         "REDIS_URL": "redis://127.0.0.1:6379/0"
       }
@@ -274,7 +275,7 @@ from agentic_composite_memory import (
 )
 
 service = CompositeMemoryService.from_postgres_stack(
-    dsn="postgresql://platform_admin:platform_secret@127.0.0.1:5433/adk_memory_platform",
+    dsn="postgresql://platform_app_user:platform_secret@127.0.0.1:5433/adk_memory_platform",
     embedding_adapter=GeminiEmbeddingAdapter(output_dimensionality=1536),
     extractor_adapter=GeminiOntologyExtractorAdapter(model="gemini-2.5-flash"),
 )
@@ -306,7 +307,7 @@ from agentic_composite_memory import (
     GeminiOntologyExtractorAdapter,
 )
 
-pg = PostgresPgVectorAdapter(dsn="postgresql://platform_admin:platform_secret@127.0.0.1:5433/adk_memory_platform")
+pg = PostgresPgVectorAdapter(dsn="postgresql://platform_app_user:platform_secret@127.0.0.1:5433/adk_memory_platform")
 neo4j = Neo4jGraphAdapter(uri="bolt://127.0.0.1:7687", auth=("neo4j", "platform_secret"))
 redis_pb = RedisPlaybookAndWorkingAdapter(redis_url="redis://127.0.0.1:6379/0")
 

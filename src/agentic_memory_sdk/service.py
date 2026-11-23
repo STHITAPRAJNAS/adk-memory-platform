@@ -96,7 +96,7 @@ from .models import (
     RelationRule,
     WorkingMemoryBlock,
 )
-from .security import MemoryObservability
+from .security import MemoryObservability, MemoryRole, get_current_principal
 from .ports import (
     EmbeddingAdapter,
     EpisodicAndSeedStoreAdapter,
@@ -337,11 +337,46 @@ class CompositeMemoryService(BaseMemoryService):
             )
         return vertex_upserts, edge_mutations
 
-    def _split_tenant_app(self, app_name: str) -> tuple[str, str]:
+    def _split_tenant_app(
+        self, app_name: str, user_id: str | None = None
+    ) -> tuple[str, str]:
+        principal = get_current_principal()
         if ":" in app_name:
             t_id, a_name = app_name.split(":", 1)
-            return t_id, a_name
-        return self.default_tenant_id, app_name
+        else:
+            # When authenticated, a bare app_name resolves to the caller's OWN tenant (never `default_tenant_id`!)
+            if principal is not None and principal.tenant_id != "*":
+                t_id, a_name = principal.tenant_id, app_name
+            else:
+                t_id, a_name = self.default_tenant_id, app_name
+
+        if principal is not None:
+            is_global_admin = (
+                principal.has_role(MemoryRole.PLATFORM_ADMIN) and principal.tenant_id == "*"
+            )
+            if not is_global_admin:
+                if t_id != principal.tenant_id:
+                    raise PermissionError(
+                        f"Tenant isolation violation: principal tenant '{principal.tenant_id}' "
+                        f"cannot access tenant '{t_id}'"
+                    )
+                if (
+                    principal.allowed_apps is not None
+                    and a_name not in principal.allowed_apps
+                    and f"{t_id}:{a_name}" not in principal.allowed_apps
+                ):
+                    raise PermissionError(
+                        f"App scope violation: principal '{principal.subject}' not allowed on app '{a_name}'"
+                    )
+                if (
+                    principal.allowed_users is not None
+                    and user_id is not None
+                    and user_id not in principal.allowed_users
+                ):
+                    raise PermissionError(
+                        f"User scope violation: principal '{principal.subject}' not allowed on user '{user_id}'"
+                    )
+        return t_id, a_name
 
     # ========================================================================
     # ADK CONTRACT 1: Full Session Ingestion
@@ -368,7 +403,7 @@ class CompositeMemoryService(BaseMemoryService):
         defer_extraction: bool | None = None,
         extraction_mode: ExtractionMode | str | None = None,
     ) -> None:
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
 
         if not self.rate_limiter.check_and_record(
@@ -563,7 +598,7 @@ class CompositeMemoryService(BaseMemoryService):
         as_of_iso: str | None = None,
         max_hops: int = 2,
     ) -> SearchMemoryResponse:
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
         q_vec = await self.embedder.embed(query)
 
@@ -711,7 +746,7 @@ class CompositeMemoryService(BaseMemoryService):
         steps: Sequence[ReasoningTraceStep],
     ) -> None:
         """Records Tier 3 Procedural Reasoning Trace (`AgentRun -> ToolCall -> Entity`)."""
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
         await self.graph.record_reasoning_trace(ctx, run_id, session_id, steps)
 
@@ -729,7 +764,7 @@ class CompositeMemoryService(BaseMemoryService):
         Caches a proven Tier 3 Agent Playbook in `RedisPlaybookAndWorkingAdapter`
         so future matching intents across the app or domain resolve with sub-5ms recall.
         """
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
         target_ns = ctx.write_namespace if share_in_domain else ctx.app_private_namespace
         clean_intent = PIIScrubber.scrub(trigger_intent)
@@ -921,7 +956,7 @@ class CompositeMemoryService(BaseMemoryService):
         Episodic, Seed, Bi-Temporal Graph, Working Memory Blocks, and Memory Revision History
         (both in-memory and PostgreSQL).
         """
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
         purged_episode_ids = await self.seed_store.purge_user_data(ctx)
         await self.graph.purge_episode_lineage(
@@ -1824,7 +1859,7 @@ class CompositeMemoryService(BaseMemoryService):
         """
         import re
 
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
         tbox = ctx.tbox
         q_vec = await self.embedder.embed(query)
@@ -2141,20 +2176,24 @@ class CompositeMemoryService(BaseMemoryService):
 
             pool = await getattr(self.seed_store, "_get_pool")()
             async with pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT episode_id::text, tenant_id, app_name, user_id, session_id,
-                           namespace, author, content_text, created_at, custom_metadata
-                    FROM episodic_memories
-                    WHERE tenant_id = $1 AND app_name = $2 AND user_id = $3
-                    ORDER BY created_at DESC
-                    LIMIT $4
-                    """,
-                    ctx.tenant_id,
-                    ctx.app_name,
-                    ctx.user_id,
-                    limit,
-                )
+                async with conn.transaction():
+                    await conn.execute("SELECT set_config('app.tenant_id', $1, true)", ctx.tenant_id)
+                    await conn.execute("SELECT set_config('app.app_name', $1, true)", ctx.app_name)
+                    await conn.execute("SELECT set_config('app.user_id', $1, true)", ctx.user_id)
+                    rows = await conn.fetch(
+                        """
+                        SELECT episode_id::text, tenant_id, app_name, user_id, session_id,
+                               namespace, author, content_text, created_at, custom_metadata
+                        FROM episodic_memories
+                        WHERE tenant_id = $1 AND app_name = $2 AND user_id = $3
+                        ORDER BY created_at DESC
+                        LIMIT $4
+                        """,
+                        ctx.tenant_id,
+                        ctx.app_name,
+                        ctx.user_id,
+                        limit,
+                    )
             out: list[EpisodicRecord] = []
             for r in rows:
                 meta = r["custom_metadata"]
@@ -2209,17 +2248,21 @@ class CompositeMemoryService(BaseMemoryService):
             if action == "RESOLVE":
                 patch["expires_at"] = exp_iso
             async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    UPDATE episodic_memories
-                    SET custom_metadata = COALESCE(custom_metadata, '{}'::jsonb) || $3::jsonb
-                    WHERE tenant_id = $1 AND episode_id = $2::uuid
-                    RETURNING content_text
-                    """,
-                    ctx.tenant_id,
-                    target_episode_id,
-                    _json.dumps(patch),
-                )
+                async with conn.transaction():
+                    await conn.execute("SELECT set_config('app.tenant_id', $1, true)", ctx.tenant_id)
+                    await conn.execute("SELECT set_config('app.app_name', $1, true)", ctx.app_name)
+                    await conn.execute("SELECT set_config('app.user_id', $1, true)", ctx.user_id)
+                    row = await conn.fetchrow(
+                        """
+                        UPDATE episodic_memories
+                        SET custom_metadata = COALESCE(custom_metadata, '{}'::jsonb) || $3::jsonb
+                        WHERE tenant_id = $1 AND episode_id = $2::uuid
+                        RETURNING content_text
+                        """,
+                        ctx.tenant_id,
+                        target_episode_id,
+                        _json.dumps(patch),
+                    )
                 if row:
                     prev_text = row["content_text"]
 
@@ -2246,7 +2289,7 @@ class CompositeMemoryService(BaseMemoryService):
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Lists stored episodic memories for inspection in the Console UI or API."""
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
         eps = await self._fetch_user_episodes_for_reconciliation(ctx, limit=limit)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -2284,7 +2327,7 @@ class CompositeMemoryService(BaseMemoryService):
         reason: str = "Manual edit via Console/API",
     ) -> dict[str, Any]:
         """Manually edits a stored memory, re-embeds it, and records an immutable MemoryRevisionRecord."""
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         clean_new = PIIScrubber.scrub(new_content)
         new_vec = await self.embedder.embed(clean_new)
         prev_text: str | None = None
@@ -2305,32 +2348,36 @@ class CompositeMemoryService(BaseMemoryService):
         elif hasattr(self.seed_store, "_get_pool"):
             pool = await getattr(self.seed_store, "_get_pool")()
             async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    SELECT content_text FROM episodic_memories
-                    WHERE tenant_id = $1 AND user_id = $2 AND episode_id = $3::uuid
-                    """,
-                    tenant_id,
-                    user_id,
-                    episode_id,
-                )
-                if row:
-                    prev_text = row["content_text"]
-                    await conn.execute(
+                async with conn.transaction():
+                    await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
+                    await conn.execute("SELECT set_config('app.app_name', $1, true)", clean_app)
+                    await conn.execute("SELECT set_config('app.user_id', $1, true)", user_id)
+                    row = await conn.fetchrow(
                         """
-                        UPDATE episodic_memories
-                        SET content_text = $4,
-                            embedding = $5::vector,
-                            custom_metadata = COALESCE(custom_metadata, '{}'::jsonb) || '{"manually_edited": true}'::jsonb
+                        SELECT content_text FROM episodic_memories
                         WHERE tenant_id = $1 AND user_id = $2 AND episode_id = $3::uuid
                         """,
                         tenant_id,
                         user_id,
                         episode_id,
-                        clean_new,
-                        str(new_vec),
                     )
-                    found = True
+                    if row:
+                        prev_text = row["content_text"]
+                        await conn.execute(
+                            """
+                            UPDATE episodic_memories
+                            SET content_text = $4,
+                                embedding = $5::vector,
+                                custom_metadata = COALESCE(custom_metadata, '{}'::jsonb) || '{"manually_edited": true}'::jsonb
+                            WHERE tenant_id = $1 AND user_id = $2 AND episode_id = $3::uuid
+                            """,
+                            tenant_id,
+                            user_id,
+                            episode_id,
+                            clean_new,
+                            str(new_vec),
+                        )
+                        found = True
 
         if not found:
             raise ValueError(f"Episode '{episode_id}' not found for user '{user_id}'")
@@ -2360,7 +2407,7 @@ class CompositeMemoryService(BaseMemoryService):
         reason: str = "Manual delete via Console/API",
     ) -> dict[str, Any]:
         """Deletes a single memory record and logs an immutable DELETE MemoryRevisionRecord."""
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         prev_text: str | None = None
         found = False
         if hasattr(self.seed_store, "episodes"):
@@ -2380,16 +2427,20 @@ class CompositeMemoryService(BaseMemoryService):
         elif hasattr(self.seed_store, "_get_pool"):
             pool = await getattr(self.seed_store, "_get_pool")()
             async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    DELETE FROM episodic_memories
-                    WHERE tenant_id = $1 AND user_id = $2 AND episode_id = $3::uuid
-                    RETURNING content_text
-                    """,
-                    tenant_id,
-                    user_id,
-                    episode_id,
-                )
+                async with conn.transaction():
+                    await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
+                    await conn.execute("SELECT set_config('app.app_name', $1, true)", clean_app)
+                    await conn.execute("SELECT set_config('app.user_id', $1, true)", user_id)
+                    row = await conn.fetchrow(
+                        """
+                        DELETE FROM episodic_memories
+                        WHERE tenant_id = $1 AND user_id = $2 AND episode_id = $3::uuid
+                        RETURNING content_text
+                        """,
+                        tenant_id,
+                        user_id,
+                        episode_id,
+                    )
                 if row:
                     prev_text = row["content_text"]
                     found = True
@@ -2422,6 +2473,18 @@ class CompositeMemoryService(BaseMemoryService):
         app_filter: str | None = None
         if app_name:
             tenant_filter, app_filter = self._split_tenant_app(app_name)
+        principal = get_current_principal()
+        if principal is not None:
+            is_global_admin = (
+                principal.has_role(MemoryRole.PLATFORM_ADMIN) and principal.tenant_id == "*"
+            )
+            if not is_global_admin:
+                # Always scope unfiltered queries to the authenticated caller's tenant
+                tenant_filter = principal.tenant_id
+                if principal.allowed_users is not None and user_id and user_id not in principal.allowed_users:
+                    raise PermissionError(
+                        f"User scope violation: principal '{principal.subject}' not allowed on user '{user_id}'"
+                    )
         out: list[MemoryRevisionRecord] = []
         for rev in reversed(self.memory_revisions):
             if tenant_filter and rev.tenant_id != tenant_filter:
@@ -2429,6 +2492,12 @@ class CompositeMemoryService(BaseMemoryService):
             if app_filter and rev.app_name != app_filter:
                 continue
             if user_id and rev.user_id != user_id:
+                continue
+            if (
+                principal is not None
+                and principal.allowed_users is not None
+                and rev.user_id not in principal.allowed_users
+            ):
                 continue
             out.append(rev)
             if len(out) >= limit:
@@ -2439,7 +2508,7 @@ class CompositeMemoryService(BaseMemoryService):
         self, app_name: str, user_id: str
     ) -> list[WorkingMemoryBlock]:
         """Returns all Letta-style self-editable Core Working Memory Blocks for this user/app."""
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         return [
             blk
             for (t, a, u, _lbl), blk in self.working_memory_blocks.items()
@@ -2461,7 +2530,7 @@ class CompositeMemoryService(BaseMemoryService):
         Letta / MemGPT-style self-editing Core Working Memory Block (`replace` or `append`).
         Automatically PII-scrubs the block value and bounds it to `max_chars`.
         """
-        tenant_id, clean_app = self._split_tenant_app(app_name)
+        tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
         clean_val = PIIScrubber.scrub(value)
         key = (tenant_id, clean_app, user_id, label)
         existing = self.working_memory_blocks.get(key)
@@ -2584,13 +2653,24 @@ class CompositeMemoryService(BaseMemoryService):
             app_filter: str | None = None
             if app_name:
                 tenant_filter, app_filter = self._split_tenant_app(app_name)
+            principal = get_current_principal()
+            if principal is not None:
+                is_global_admin = (
+                    principal.has_role(MemoryRole.PLATFORM_ADMIN) and principal.tenant_id == "*"
+                )
+                if not is_global_admin:
+                    tenant_filter = principal.tenant_id
+                    if principal.allowed_users is not None and user_id and user_id not in principal.allowed_users:
+                        raise PermissionError(
+                            f"User scope violation: principal '{principal.subject}' not allowed on user '{user_id}'"
+                        )
             pool = await getattr(self.seed_store, "_get_pool")()
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    if tenant_filter:
-                        await conn.execute(
-                            "SELECT set_config('app.tenant_id', $1, true)", tenant_filter
-                        )
+                    rls_tenant = tenant_filter if tenant_filter else "*"
+                    await conn.execute(
+                        "SELECT set_config('app.tenant_id', $1, true)", rls_tenant
+                    )
                     clauses: list[str] = []
                     params: list[Any] = []
                     if tenant_filter:
@@ -2639,7 +2719,7 @@ class CompositeMemoryService(BaseMemoryService):
         """Reads durable Working Memory Blocks from PostgreSQL when available, else in-memory."""
         if hasattr(self.seed_store, "_get_pool"):
             await self._ensure_pg_lifecycle_tables()
-            tenant_id, clean_app = self._split_tenant_app(app_name)
+            tenant_id, clean_app = self._split_tenant_app(app_name, user_id=user_id)
             pool = await getattr(self.seed_store, "_get_pool")()
             async with pool.acquire() as conn:
                 async with conn.transaction():
