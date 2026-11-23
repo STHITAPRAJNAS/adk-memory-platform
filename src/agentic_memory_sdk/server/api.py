@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import json
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from ..governance import PlatformOntologyRegistrar
@@ -13,8 +15,10 @@ from ..models import (
     ReasoningTraceStep,
 )
 from ..ontology_loader import DomainPackLoader
+from ..security import AuthPolicyConfig
 from ..service import CompositeMemoryService, Event, types
 from .mcp_server import MemoryMcpServerTools, create_mcp_server
+from .ui_console import CONSOLE_HTML
 
 
 class McpToolCallRequest(BaseModel):
@@ -113,12 +117,31 @@ class CheckAnswerableRequest(BaseModel):
     max_hops: int = 2
 
 
+class EditMemoryRequest(BaseModel):
+    app_name: str
+    user_id: str
+    new_content: str
+    actor: str = "operator"
+    reason: str = "Manual edit via API"
+
+
+class UpsertWorkingBlockRequest(BaseModel):
+    app_name: str
+    user_id: str
+    label: str
+    value: str
+    mode: str = "replace"
+    max_chars: int = 2000
+    actor: str = "agent"
+
+
 def create_memory_platform_app(
     service: CompositeMemoryService,
     registrar: PlatformOntologyRegistrar | None = None,
     enable_outbox_worker: bool = True,
     outbox_interval_sec: float = 2.0,
     mount_mcp: bool = True,
+    auth_policy: AuthPolicyConfig | None = None,
 ) -> FastAPI:
     """
     Creates the Unified Multi-Tenant Memory-as-a-Service FastAPI + MCP application.
@@ -541,6 +564,161 @@ def create_memory_platform_app(
             min_overflow_confidence=min_overflow_confidence,
         )
         return {"status": "completed", **stats}
+
+    # ------------------------------------------------------------------------
+    # ENTERPRISE AUTHENTICATION, RBAC & TENANT-ISOLATION MIDDLEWARE
+    # ------------------------------------------------------------------------
+    if auth_policy is not None and auth_policy.enabled:
+
+        @app.middleware("http")
+        async def auth_and_rbac_middleware(request: Request, call_next: Any):
+            path = request.url.path
+            if any(path == p or path.startswith(p + "/") for p in auth_policy.public_paths):
+                return await call_next(request)
+            try:
+                principal = await auth_policy.authenticate(
+                    request.headers.get("authorization"),
+                    request.headers.get("x-api-key"),
+                )
+            except PermissionError as exc:
+                service.observability.inc("auth_denied")
+                return JSONResponse(status_code=401, content={"detail": str(exc)})
+
+            required_role = auth_policy.required_role_for_route(request.method, path)
+            if not principal.has_role(required_role):
+                service.observability.inc("rbac_denied")
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": f"Forbidden: requires role '{required_role.value}' "
+                        f"(caller '{principal.subject}' has {[r.value for r in principal.roles]})"
+                    },
+                )
+
+            # Enforce tenant & scope isolation on query params or JSON body
+            target_tenant = request.query_params.get("tenant_id")
+            target_app = request.query_params.get("app_name")
+            target_user = request.query_params.get("user_id")
+            if request.method in ("POST", "PUT", "PATCH"):
+                body_bytes = await request.body()
+                if body_bytes:
+                    try:
+                        parsed = json.loads(body_bytes.decode("utf-8"))
+                        if isinstance(parsed, dict):
+                            target_tenant = target_tenant or parsed.get("tenant_id")
+                            target_app = target_app or parsed.get("app_name")
+                            target_user = target_user or parsed.get("user_id")
+                    except Exception:
+                        pass
+            try:
+                auth_policy.authorize_tenant_and_scope(
+                    principal,
+                    target_tenant_id=target_tenant,
+                    target_app_name=target_app,
+                    target_user_id=target_user,
+                )
+            except PermissionError as exc:
+                service.observability.inc("tenant_isolation_denied")
+                return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+            request.state.principal = principal
+            return await call_next(request)
+
+    # ------------------------------------------------------------------------
+    # MEMORY INSPECTOR, REVISIONS, WORKING BLOCKS, OBSERVABILITY & CONSOLE UI
+    # ------------------------------------------------------------------------
+    @app.get("/ui", response_class=HTMLResponse)
+    async def governance_console_ui() -> HTMLResponse:
+        """Serves the bundled Visual Memory & Ontology Governance Console UI."""
+        return HTMLResponse(content=CONSOLE_HTML)
+
+    @app.get("/v1/memory/items")
+    async def list_memory_items(
+        app_name: str,
+        user_id: str,
+        include_expired: bool = False,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Lists stored episodic & cognitive memories for inspection/editing."""
+        items = await service.list_user_memories(
+            app_name, user_id, include_expired=include_expired, limit=limit
+        )
+        return {"count": len(items), "memories": items}
+
+    @app.put("/v1/memory/items/{episode_id}")
+    async def edit_memory_item(episode_id: str, req: EditMemoryRequest) -> dict[str, Any]:
+        """Manually edits a memory, re-embeds it, and records an immutable revision."""
+        try:
+            return await service.edit_user_memory(
+                app_name=req.app_name,
+                user_id=req.user_id,
+                episode_id=episode_id,
+                new_content=req.new_content,
+                actor=req.actor,
+                reason=req.reason,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/v1/memory/items/{episode_id}")
+    async def delete_memory_item(
+        episode_id: str,
+        app_name: str,
+        user_id: str,
+        actor: str = "operator",
+        reason: str = "Manual delete via API",
+    ) -> dict[str, Any]:
+        """Deletes a single memory record and logs an immutable DELETE revision."""
+        try:
+            return await service.delete_user_memory(
+                app_name=app_name,
+                user_id=user_id,
+                episode_id=episode_id,
+                actor=actor,
+                reason=reason,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/v1/memory/revisions")
+    async def list_memory_revisions(
+        app_name: str | None = None,
+        user_id: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Lists immutable memory revision history (ADD/UPDATE/RESOLVE/EXPIRE/DELETE/MANUAL_EDIT)."""
+        revs = service.get_memory_revisions(app_name=app_name, user_id=user_id, limit=limit)
+        return {"count": len(revs), "revisions": [r.model_dump() for r in revs]}
+
+    @app.get("/v1/memory/blocks")
+    async def list_working_blocks(app_name: str, user_id: str) -> dict[str, Any]:
+        """Lists Letta-style self-editable Core Working Memory Blocks for a user/app."""
+        blocks = service.get_working_memory_blocks(app_name, user_id)
+        return {"count": len(blocks), "blocks": [b.model_dump() for b in blocks]}
+
+    @app.post("/v1/memory/blocks")
+    async def upsert_working_block(req: UpsertWorkingBlockRequest) -> dict[str, Any]:
+        """Creates, replaces, or appends to a Letta-style Core Working Memory Block."""
+        blk = service.upsert_working_memory_block(
+            app_name=req.app_name,
+            user_id=req.user_id,
+            label=req.label,
+            value=req.value,
+            mode=req.mode,
+            max_chars=req.max_chars,
+            actor=req.actor,
+        )
+        return {"status": "saved", "block": blk.model_dump()}
+
+    @app.get("/v1/metrics")
+    async def get_metrics_json() -> dict[str, Any]:
+        """Returns OpenTelemetry-compatible observability counters & latency percentiles."""
+        return service.observability.snapshot()
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def get_metrics_prometheus() -> PlainTextResponse:
+        """Returns Prometheus text-format metrics for scraping."""
+        return PlainTextResponse(content=service.observability.to_prometheus_text())
 
     # ------------------------------------------------------------------------
     # UNIFIED MCP LAYER: Co-hosted MCP SSE, Streamable HTTP & Stateless Tool RPC

@@ -124,6 +124,21 @@ class GeminiOntologyExtractorAdapter(OntologyExtractorAdapter):
                 "`ALLOWED TBOX RELATIONS`. Classify any out-of-schema entity as 'p:CandidateConcept'."
             )
         )
+        topics_block = ""
+        if getattr(tbox, "custom_extraction_topics", None):
+            topics_lines = "\n".join(f"  - {t}" for t in tbox.custom_extraction_topics)
+            topics_block = f"\nCUSTOM PRIORITY EXTRACTION TOPICS:\n{topics_lines}\n"
+        few_shot_block = ""
+        if getattr(tbox, "few_shot_examples", None):
+            ex_lines: list[str] = []
+            for idx, ex in enumerate(tbox.few_shot_examples, start=1):
+                ex_lines.append(
+                    f"  Example {idx}: Input={ex.input_text!r} -> "
+                    f"Entities={json.dumps(ex.expected_entities)}, "
+                    f"Facts={json.dumps(ex.expected_facts)}"
+                    + (f" ({ex.notes})" if ex.notes else "")
+                )
+            few_shot_block = "\nFEW-SHOT EXTRACTION EXAMPLES:\n" + "\n".join(ex_lines) + "\n"
         return (
             "You are an Ontology-Guided Knowledge Graph Extractor & Smart Memory Classifier.\n"
             "1. First, evaluate if the transcript is purely ephemeral social chitchat, pleasantries, or terminal sign-offs "
@@ -141,6 +156,7 @@ class GeminiOntologyExtractorAdapter(OntologyExtractorAdapter):
             "   - 'app_private' for app-specific workflow state or candidate concepts.\n"
             f"ALLOWED TBOX CLASSES: [{allowed_classes}]\n"
             f"ALLOWED TBOX RELATIONS:\n{relations_block}\n"
+            f"{topics_block}{few_shot_block}"
             f"{overflow_rule}"
         )
 

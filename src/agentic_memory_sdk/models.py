@@ -115,6 +115,49 @@ class DomainPackSpec(BaseModel):
     certified_by: str | None = None
 
 
+class MemoryRetentionPolicy(BaseModel):
+    """
+    Configurable per-app memory lifecycle, TTL, and recency-decay policy
+    (comparable to AWS Bedrock AgentCore LTM TTL & cognitive forgetting curves).
+    """
+
+    default_episode_ttl_days: int | None = Field(
+        default=None,
+        description="Optional default TTL (days) for ordinary episodic memories (None = retain indefinitely)",
+    )
+    hypothesis_ttl_days: int = Field(
+        default=14,
+        ge=1,
+        description="Auto-expire unconfirmed p:WorkingHypothesis records after this many days",
+    )
+    completed_goal_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        description="Auto-expire resolved/completed p:ProspectiveGoal records after this many days",
+    )
+    enable_recency_decay: bool = Field(
+        default=True,
+        description="Apply exponential recency decay weighting to non-pinned memories during ranking",
+    )
+    decay_half_life_days: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Half-life (in days) for non-pinned episodic recency decay",
+    )
+
+
+class FewShotExtractionExample(BaseModel):
+    """
+    Vertex AI Memory Bank-style customizable few-shot extraction example
+    injected into the TBox extraction prompt for higher domain precision.
+    """
+
+    input_text: str
+    expected_entities: list[dict[str, Any]] = Field(default_factory=list)
+    expected_facts: list[dict[str, Any]] = Field(default_factory=list)
+    notes: str = ""
+
+
 class AppMemoryManifest(BaseModel):
     """
     Developer-facing Ontology-as-Code registration manifest for any ADK agent app.
@@ -133,6 +176,15 @@ class AppMemoryManifest(BaseModel):
     allow_emergent_overflow: bool = True
     min_domain_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     extraction_mode: ExtractionMode = ExtractionMode.HOT
+    retention_policy: MemoryRetentionPolicy = Field(default_factory=MemoryRetentionPolicy)
+    custom_extraction_topics: list[str] = Field(
+        default_factory=list,
+        description="Optional domain-specific topics/instructions guiding what the extractor prioritizes",
+    )
+    few_shot_examples: list[FewShotExtractionExample] = Field(
+        default_factory=list,
+        description="Optional few-shot extraction examples injected into the LLM TBox prompt",
+    )
     max_rpm: int = 600
     max_active_vertices: int = 500_000
 
@@ -315,6 +367,9 @@ class CompiledTBox(BaseModel):
     )
     disjoint_classes: list[tuple[str, str]] = Field(default_factory=list)
     relations: dict[str, RelationRule] = Field(default_factory=_default_layer0_relations)
+    retention_policy: MemoryRetentionPolicy = Field(default_factory=MemoryRetentionPolicy)
+    custom_extraction_topics: list[str] = Field(default_factory=list)
+    few_shot_examples: list[FewShotExtractionExample] = Field(default_factory=list)
 
     def is_subclass_of(self, child_cls: str, target_parent_cls: str) -> bool:
         """Checks RDFS subClassOf hierarchy transitively (e.g. Microservice -> SoftwareAsset -> Asset -> p:Object)."""
@@ -378,6 +433,10 @@ class EpisodicRecord(BaseModel):
     content_text: str
     embedding: list[float] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: str | None = Field(
+        default=None,
+        description="Optional ISO-8601 expiration timestamp for TTL enforcement",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -391,6 +450,14 @@ class ExtractedEntity(BaseModel):
     scope: MemoryScope = Field(
         default=MemoryScope.AUTO,
         description="Target sharing scope (auto, user_global, app_private, domain_shared)",
+    )
+    epistemic_status: Literal["CONFIRMED", "HYPOTHESIS", "REFUTED"] = Field(
+        default="CONFIRMED",
+        description="Epistemic certainty of the fact; HYPOTHESIS never invalidates CONFIRMED functional edges",
+    )
+    expires_at: str | None = Field(
+        default=None,
+        description="Optional ISO-8601 TTL expiration timestamp for this fact",
     )
 
 
@@ -411,6 +478,14 @@ class ExtractedFact(BaseModel):
     scope: MemoryScope = Field(
         default=MemoryScope.AUTO,
         description="Target sharing scope (auto, user_global, app_private, domain_shared)",
+    )
+    epistemic_status: Literal["CONFIRMED", "HYPOTHESIS", "REFUTED"] = Field(
+        default="CONFIRMED",
+        description="Epistemic certainty of the fact; HYPOTHESIS never invalidates CONFIRMED functional edges",
+    )
+    expires_at: str | None = Field(
+        default=None,
+        description="Optional ISO-8601 TTL expiration timestamp for this fact",
     )
 
 
@@ -566,3 +641,52 @@ class OntologyAuditLogEntry(BaseModel):
     triggered_by: str = "platform_steward"
     source_episode_ids: list[str] = Field(default_factory=list)
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class MemoryRevisionRecord(BaseModel):
+    """
+    Immutable memory revision audit record (comparable to Vertex AI Memory Bank Revisions).
+    Tracks every ADD, UPDATE, RESOLVE, DELETE, EXPIRE, or MANUAL_EDIT event on a memory.
+    """
+
+    revision_id: str = Field(default_factory=lambda: f"rev_{uuid.uuid4().hex[:12]}")
+    tenant_id: str
+    app_name: str
+    user_id: str
+    memory_id: str
+    action: Literal["ADD", "UPDATE", "RESOLVE", "DELETE", "EXPIRE", "MANUAL_EDIT", "PROMOTE_HYPOTHESIS"]
+    previous_content: str | None = None
+    new_content: str | None = None
+    reason: str = ""
+    actor: str = "memory_service"
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class WorkingMemoryBlock(BaseModel):
+    """
+    Letta / MemGPT-style self-editable Core Working Memory Block.
+    Allows an agent (or operator via the Console UI) to pin, replace, or append
+    structured working scratchpad state that is always injected into recall context.
+    """
+
+    block_id: str = Field(default_factory=lambda: f"blk_{uuid.uuid4().hex[:10]}")
+    tenant_id: str
+    app_name: str
+    user_id: str
+    label: str = Field(description="Short block identifier, e.g. 'human_profile', 'active_task', 'guardrails'")
+    value: str = Field(default="", description="Current text contents of the working memory block")
+    max_chars: int = Field(default=2000, ge=64, le=32000)
+    updated_by: str = "agent"
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class ReconciliationDecision(BaseModel):
+    """
+    Mem0 / Vertex AI Memory Bank-style free-text memory reconciliation decision
+    for non-functional cognitive memories (UserPreference, ProspectiveGoal, WorkingHypothesis, EpisodicLesson).
+    """
+
+    action: Literal["ADD", "UPDATE", "RESOLVE", "DELETE", "NOOP"]
+    target_episode_id: str | None = None
+    merged_content: str | None = None
+    reason: str = ""

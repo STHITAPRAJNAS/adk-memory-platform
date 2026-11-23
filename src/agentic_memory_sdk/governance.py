@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from typing import Any, Tuple
 
 from .models import (
@@ -15,9 +16,11 @@ from .models import (
     ExtractionPayload,
     GovernanceTier,
     GraphFactReadResult,
+    MemoryRetentionPolicy,
     MemoryScope,
     OntologyAuditLogEntry,
     PlatformTenantContext,
+    ReconciliationDecision,
     RelationRule,
     UpperConceptType,
     _default_layer0_relations,
@@ -1269,6 +1272,9 @@ class PlatformOntologyRegistrar:
             classes=classes,
             disjoint_classes=disjoint_classes,
             relations=relations,
+            retention_policy=manifest.retention_policy,
+            custom_extraction_topics=list(manifest.custom_extraction_topics),
+            few_shot_examples=list(manifest.few_shot_examples),
         )
         return read_namespaces, write_namespace, tbox
 
@@ -1431,3 +1437,180 @@ class TokenBudgetSerializer:
             used_chars += len(ep.content_text)
 
         return graph_block, kept_episodes
+
+
+class MemoryReconciliationEngine:
+    """
+    Mem0 / Vertex AI Memory Bank-style free-text cognitive memory reconciliation
+    and lifecycle TTL / recency-decay engine.
+
+    Handles non-functional cognitive memories (`p:UserPreference`, `p:ProspectiveGoal`,
+    `p:WorkingHypothesis`, `p:EpisodicLesson`) where deterministic functional-edge
+    invalidation alone cannot reconcile natural-language updates, resolutions, or deletions.
+    """
+
+    _UPDATE_CUES = (
+        "switched from",
+        "switch from",
+        "instead of",
+        "no longer",
+        "changed my preference",
+        "changed preference",
+        "now prefers",
+        "now prefer",
+        "updated preference",
+        "replace my preference",
+    )
+    _RESOLVE_CUES = (
+        "completed",
+        "finished",
+        "resolved",
+        "done with",
+        "closed goal",
+        "goal achieved",
+        "confirmed hypothesis",
+        "verified hypothesis",
+        "refuted hypothesis",
+        "disproved hypothesis",
+        "ruled out",
+    )
+    _STOPWORDS = frozenset(
+        {
+            "the",
+            "a",
+            "an",
+            "to",
+            "for",
+            "of",
+            "in",
+            "on",
+            "at",
+            "by",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "and",
+            "or",
+            "my",
+            "user",
+            "i",
+            "we",
+            "they",
+            "that",
+            "this",
+            "from",
+            "with",
+            "now",
+            "no",
+            "longer",
+        }
+    )
+
+    @classmethod
+    def _content_tokens(cls, text: str) -> set[str]:
+        tokens = re.findall(r"[a-z0-9_-]{3,}", text.lower())
+        return {t for t in tokens if t not in cls._STOPWORDS}
+
+    @classmethod
+    def reconcile_episode(
+        cls,
+        new_text: str,
+        existing_episodes: list[EpisodicRecord],
+    ) -> ReconciliationDecision:
+        """
+        Compares an incoming cognitive episode against existing user episodes and returns
+        a structured `ADD` | `UPDATE` | `RESOLVE` | `DELETE` | `NOOP` decision.
+        """
+        norm_new = " ".join(new_text.strip().lower().split())
+        if not norm_new:
+            return ReconciliationDecision(action="NOOP", reason="Empty content")
+
+        new_tokens = cls._content_tokens(new_text)
+        has_update_cue = any(cue in norm_new for cue in cls._UPDATE_CUES)
+        has_resolve_cue = any(cue in norm_new for cue in cls._RESOLVE_CUES)
+
+        best_match: EpisodicRecord | None = None
+        best_overlap = 0.0
+
+        for ep in existing_episodes:
+            if ep.metadata.get("is_summary") or ep.metadata.get("reconciled_status") in (
+                "SUPERSEDED",
+                "RESOLVED",
+            ):
+                continue
+            norm_old = " ".join(ep.content_text.strip().lower().split())
+            if norm_old == norm_new:
+                return ReconciliationDecision(
+                    action="NOOP",
+                    target_episode_id=ep.episode_id,
+                    reason="Duplicate episode already stored",
+                )
+            old_tokens = cls._content_tokens(ep.content_text)
+            if not old_tokens or not new_tokens:
+                continue
+            overlap = len(new_tokens & old_tokens) / max(1, min(len(new_tokens), len(old_tokens)))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_match = ep
+
+        if best_match is not None and best_overlap >= 0.30:
+            if has_resolve_cue:
+                return ReconciliationDecision(
+                    action="RESOLVE",
+                    target_episode_id=best_match.episode_id,
+                    merged_content=f"{best_match.content_text} [RESOLVED: {new_text.strip()}]",
+                    reason=f"Resolved prior memory (token_overlap={best_overlap:.2f})",
+                )
+            if has_update_cue:
+                return ReconciliationDecision(
+                    action="UPDATE",
+                    target_episode_id=best_match.episode_id,
+                    merged_content=new_text.strip(),
+                    reason=f"Superseded prior preference/constraint (token_overlap={best_overlap:.2f})",
+                )
+
+        return ReconciliationDecision(action="ADD", reason="New distinct memory")
+
+    @staticmethod
+    def compute_default_expiration(
+        created_at: datetime,
+        cognitive_markers: list[str],
+        policy: MemoryRetentionPolicy,
+    ) -> str | None:
+        """
+        Computes an ISO-8601 `expires_at` timestamp from the app's `MemoryRetentionPolicy`.
+        Pinned guardrails, user preferences, and episodic lessons never auto-expire.
+        """
+        from datetime import timedelta
+
+        marker_set = set(cognitive_markers)
+        if marker_set & {
+            UpperConceptType.GUARDRAIL.value,
+            UpperConceptType.PREFERENCE.value,
+            UpperConceptType.LESSON.value,
+        }:
+            return None
+        if UpperConceptType.HYPOTHESIS.value in marker_set:
+            return (created_at + timedelta(days=policy.hypothesis_ttl_days)).isoformat()
+        if policy.default_episode_ttl_days is not None:
+            return (created_at + timedelta(days=policy.default_episode_ttl_days)).isoformat()
+        return None
+
+    @staticmethod
+    def compute_recency_decay(
+        created_at: datetime,
+        half_life_days: float = 30.0,
+        now: datetime | None = None,
+    ) -> float:
+        """Exponential Ebbinghaus-style recency decay factor in `(0.0, 1.0]`."""
+        import math
+
+        ref = now or datetime.now(timezone.utc)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        age_days = max(0.0, (ref - created_at).total_seconds() / 86400.0)
+        return math.pow(0.5, age_days / max(0.1, half_life_days))
+

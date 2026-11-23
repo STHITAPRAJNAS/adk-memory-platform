@@ -745,8 +745,77 @@ relationships:
             confirmed_fact_protected = "(ORD-88410) -[HAS_PRIMARY_FC]-> (FC-Dallas-03)" in post_hyp_blob
             hypothesis_explicitly_tagged = "[UNCONFIRMED_HYPOTHESIS]" in post_hyp_blob
 
+            # --- Evaluation 7 (Scenario 10): v0.2.0 Enterprise Parity Layers on Live Docker Postgres ---
+            from datetime import datetime, timedelta, timezone
+
+            v020_app = f"{tenant_id}:langgraph_concierge"
+            # 1) Free-text preference reconciliation (`ADD` -> `UPDATE`) + Goal resolution (`RESOLVE`)
+            await service.add_events_to_memory(
+                app_name=v020_app,
+                user_id="maya_lin",
+                events=[_make_event("My preference is vegetarian meals on all business flights.")],
+            )
+            await service.add_events_to_memory(
+                app_name=v020_app,
+                user_id="maya_lin",
+                events=[_make_event("I switched from vegetarian meals to pescatarian meals on business flights.")],
+            )
+            await service.add_events_to_memory(
+                app_name=v020_app,
+                user_id="maya_lin",
+                events=[_make_event("Pending goal: finalize Q4 customs audit for ORD-88410.")],
+            )
+            await service.add_events_to_memory(
+                app_name=v020_app,
+                user_id="maya_lin",
+                events=[_make_event("Completed Q4 customs audit for ORD-88410.")],
+            )
+            # 2) Expired TTL episode swept directly from live PostgreSQL
+            past_exp = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            await service.add_events_to_memory(
+                app_name=v020_app,
+                user_id="maya_lin",
+                events=[_make_event("Temporary warehouse pin TEMP-PIN-777 valid today only.")],
+                custom_metadata={"expires_at": past_exp},
+            )
+            maint_v020 = await remote_client.run_memory_maintenance(
+                min_episodes_to_compact=50, min_overflow_confidence=0.55
+            )
+            # 3) Letta-style Core Working Memory Block + Manual Inline Edit + Revisions + UI + Metrics + 17 MCP Tools
+            await remote_client.upsert_working_memory_block(
+                app_name=v020_app,
+                user_id="maya_lin",
+                label="vip_handling",
+                value="Maya Lin is a Platinum VIP shopper — always confirm FedEx Priority Locker.",
+            )
+            v020_recall = await remote_client.search_memory(
+                app_name=v020_app,
+                user_id="maya_lin",
+                query="business flights meals",
+            )
+            v020_blob = "\n".join(m.content.parts[0].text for m in v020_recall.memories)
+            working_block_injected = (
+                "[WORKING_MEMORY_BLOCKS]" in v020_blob and "Platinum VIP shopper" in v020_blob
+            )
+            preference_reconciled_live_pg = (
+                "pescatarian" in v020_blob.lower() and "TEMP-PIN-777" not in v020_blob
+            )
+            user_items = await remote_client.list_user_memories(v020_app, "maya_lin")
+            edit_res = await remote_client.edit_user_memory(
+                v020_app,
+                "maya_lin",
+                user_items[0]["episode_id"],
+                f"{user_items[0]['content_text']} [steward-verified]",
+                actor="benchmark_steward",
+            )
+            revs = await remote_client.get_memory_revisions(app_name=v020_app, user_id="maya_lin")
+            rev_actions = {r["action"] for r in revs}
+            ui_resp = await http_client.get("/ui")
+            prom_resp = await http_client.get("/metrics")
+            mcp_meta = (await http_client.get("/v1/mcp/tools")).json()
+
             report = {
-                "benchmark_version": "0.1.7",
+                "benchmark_version": "0.2.0",
                 "infrastructure_stack": {
                     "episodic_and_seed_store": "PostgreSQL 16 + pgvector HNSW + BM25 GIN + RLS (:5433)",
                     "bitemporal_knowledge_graph": "Neo4j 5 Property Graph (:7687)",
@@ -821,6 +890,16 @@ relationships:
                         "neo4j_epistemic_collapse_protected": confirmed_fact_protected,
                         "hypothesis_explicitly_tagged_in_context": hypothesis_explicitly_tagged,
                     },
+                    "10_v020_enterprise_parity_layers": {
+                        "live_postgres_preference_reconciled_and_ttl_swept": preference_reconciled_live_pg,
+                        "live_postgres_expired_memories_swept": int(maint_v020.get("expired_memories", 0)),
+                        "working_memory_block_injected": working_block_injected,
+                        "manual_edit_revision_logged": edit_res["revision"]["action"] == "MANUAL_EDIT",
+                        "revision_actions_recorded": sorted(rev_actions),
+                        "console_ui_served": ui_resp.status_code == 200 and "Agentic Composite Memory Console" in ui_resp.text,
+                        "prometheus_metrics_served": prom_resp.status_code == 200 and "adk_memory_episodes_ingested_total" in prom_resp.text,
+                        "mcp_tool_count": len(mcp_meta.get("tools", [])),
+                    },
                 },
                 "all_assertions_passed": all(
                     [
@@ -841,6 +920,14 @@ relationships:
                         int(pinned_pg_count or 0) >= 1,
                         confirmed_fact_protected,
                         hypothesis_explicitly_tagged,
+                        preference_reconciled_live_pg,
+                        int(maint_v020.get("expired_memories", 0)) >= 1,
+                        working_block_injected,
+                        edit_res["revision"]["action"] == "MANUAL_EDIT",
+                        {"ADD", "UPDATE", "RESOLVE", "EXPIRE", "MANUAL_EDIT"}.issubset(rev_actions),
+                        ui_resp.status_code == 200,
+                        prom_resp.status_code == 200,
+                        len(mcp_meta.get("tools", [])) == 17,
                     ]
                 ),
             }

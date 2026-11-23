@@ -1,0 +1,23 @@
+{
+  "harness": "LoCoMo / LongMemEval-Style Composite Memory Evaluation",
+  "mode": "deterministic",
+  "duration_ms": 21.4,
+  "overall_score_pct": 100.0,
+  "categories_passed": "6/6",
+  "category_results": {
+    "1_single_hop_factual": true,
+    "2_multi_hop_relational": true,
+    "3_temporal_update_and_time_travel": true,
+    "4_preference_and_goal_reconciliation": true,
+    "5_unanswerable_abstention": true,
+    "6_ttl_retention_and_working_blocks": true
+  },
+  "revision_actions_recorded": [
+    "ADD",
+    "EXPIRE",
+    "RESOLVE",
+    "UPDATE"
+  ],
+  "expired_memories_swept": 1,
+  "all_passed": true
+}

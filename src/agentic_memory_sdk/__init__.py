@@ -38,6 +38,7 @@ from .auth import (
 from .governance import (
     AsyncCircuitBreaker,
     EntityResolutionGuard,
+    MemoryReconciliationEngine,
     PIIScrubber,
     PlatformOntologyRegistrar,
     SmartMemoryClassifier,
@@ -67,18 +68,23 @@ from .models import (
     ExtractedFact,
     ExtractionMode,
     ExtractionPayload,
+    FewShotExtractionExample,
     GovernanceTier,
     GraphEdgeMutation,
     GraphFactReadResult,
     GraphVertexUpsert,
+    MemoryRetentionPolicy,
+    MemoryRevisionRecord,
     MemoryScope,
     OntologyAuditLogEntry,
     OutboxOperation,
     PlatformTenantContext,
     PlaybookRecord,
     ReasoningTraceStep,
+    ReconciliationDecision,
     RelationRule,
     UpperConceptType,
+    WorkingMemoryBlock,
 )
 from .ontology_loader import DomainPackLoader
 from .ports import (
@@ -88,6 +94,14 @@ from .ports import (
     OntologyExtractorAdapter,
     PlaybookStoreAdapter,
     RegistryStoreAdapter,
+)
+from .security import (
+    AuthPolicyConfig,
+    AuthPrincipal,
+    MemoryObservability,
+    MemoryRole,
+    mint_hs256_jwt,
+    verify_hs256_jwt,
 )
 from .server import MemoryMcpServerTools, create_mcp_server, create_memory_platform_app
 from .service import CompositeMemoryService, Event, types
@@ -115,6 +129,18 @@ __all__ = [
     "OutboxOperation",
     "OntologyAuditLogEntry",
     "MemoryScope",
+    "MemoryRetentionPolicy",
+    "FewShotExtractionExample",
+    "MemoryRevisionRecord",
+    "WorkingMemoryBlock",
+    "ReconciliationDecision",
+    "MemoryReconciliationEngine",
+    "MemoryRole",
+    "AuthPrincipal",
+    "AuthPolicyConfig",
+    "MemoryObservability",
+    "mint_hs256_jwt",
+    "verify_hs256_jwt",
     "CloudAuthProvider",
     "EnterpriseTlsConfig",
     "CachedTokenAuthProviderBase",

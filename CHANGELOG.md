@@ -5,6 +5,25 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-23
+
+### Added
+- **Free-Text Cognitive Reconciliation & Immutable Memory Revisions (`MemoryReconciliationEngine`, `MemoryRevisionRecord`)**:
+  - Automatically reconciles non-functional cognitive memories (`p:UserPreference`, `p:ProspectiveGoal`, `p:WorkingHypothesis`, `p:EpisodicLesson`) via `ADD`, `UPDATE`, `RESOLVE`, `DELETE`, and `NOOP` decisions (Mem0 & Vertex AI Memory Bank parity), logging immutable `MemoryRevisionRecord` entries.
+  - Added manual inspection, inline editing (with re-embedding + `MANUAL_EDIT` revision), and single-item deletion (`list_user_memories`, `edit_user_memory`, `delete_user_memory`, `get_memory_revisions`).
+- **Configurable Per-App Retention / TTL Policy & Few-Shot Custom Topics (`MemoryRetentionPolicy`, `FewShotExtractionExample`)**:
+  - Configurable `default_episode_ttl_days`, `hypothesis_ttl_days`, `completed_goal_ttl_days`, and Ebbinghaus recency decay (`compute_recency_decay`), enforced via an automatic TTL expiration sweep in `run_memory_maintenance()` (both InMemory and PostgreSQL).
+  - Per-app `custom_extraction_topics` and `few_shot_examples` on `AppMemoryManifest` automatically injected into `build_tbox_system_instruction()` across all LLM extractors (Vertex AI Memory Bank parity).
+- **Letta / MemGPT-Style Self-Editable Core Working Memory Blocks (`WorkingMemoryBlock`)**:
+  - Added `upsert_working_memory_block` (`replace` / `append`, PII-scrubbed, character-bounded) and `get_working_memory_blocks`, automatically prepended to `search_memory` context as `[WORKING_MEMORY_BLOCKS]`.
+  - Exposed across Python SDK, FastAPI REST (`/v1/memory/blocks`), `RemoteCompositeMemoryService`, and MCP Server (expanding MCP to **17 annotated tools**, **4 resources**, and **2 prompts**).
+- **Enterprise API AuthN/AuthZ (HS256 JWT + API Key + Pluggable OIDC + RBAC + Tenant Isolation) & Observability (`security.py`)**:
+  - Added `AuthPolicyConfig`, `AuthPrincipal`, `MemoryRole` (`READER`, `AGENT`, `ONTOLOGY_STEWARD`, `COMPLIANCE_ADMIN`, `PLATFORM_ADMIN`), `mint_hs256_jwt`, `verify_hs256_jwt`, and `MemoryObservability` (OpenTelemetry auto-detection + `GET /v1/metrics` JSON + `GET /metrics` Prometheus text format).
+- **Bundled Visual Memory & Ontology Governance Console UI (`GET /ui`)**:
+  - Self-contained interactive SPA served directly by FastAPI (`server/ui_console.py`) for inspecting/editing/deleting user memories, managing Working Memory Blocks, auditing Memory Revisions, certifying/evolving Domain Packs, and monitoring live metrics.
+- **LoCoMo / LongMemEval-Style Standardized Evaluation Harness (`examples/locomo_longmemeval_harness.py`)**:
+  - Runnable 6-category benchmark harness supporting `--mode deterministic`, `--mode gemini`, `--mode openai`, and `--mode ollama`.
+
 ## [0.1.7] - 2026-11-21
 
 ### Added

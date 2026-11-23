@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -69,6 +70,7 @@ except ImportError:
 from .adapters.redis_playbook import RedisPlaybookAndWorkingAdapter
 from .governance import (
     AsyncCircuitBreaker,
+    MemoryReconciliationEngine,
     PIIScrubber,
     PlatformOntologyRegistrar,
     SmartMemoryClassifier,
@@ -85,13 +87,16 @@ from .models import (
     GraphEdgeMutation,
     GraphFactReadResult,
     GraphVertexUpsert,
+    MemoryRevisionRecord,
     OntologyAuditLogEntry,
     OutboxOperation,
     PlatformTenantContext,
     PlaybookRecord,
     ReasoningTraceStep,
     RelationRule,
+    WorkingMemoryBlock,
 )
+from .security import MemoryObservability
 from .ports import (
     EmbeddingAdapter,
     EpisodicAndSeedStoreAdapter,
@@ -148,6 +153,9 @@ class CompositeMemoryService(BaseMemoryService):
             failure_threshold=3, recovery_timeout_sec=30.0
         )
         self.rate_limiter = TenantRateLimiter(window_sec=60.0)
+        self.observability = MemoryObservability()
+        self.memory_revisions: list[MemoryRevisionRecord] = []
+        self.working_memory_blocks: dict[tuple[str, str, str, str], WorkingMemoryBlock] = {}
         self._outbox_task: asyncio.Task[None] | None = None
         self._outbox_stop_event: asyncio.Event | None = None
 
@@ -398,16 +406,52 @@ class CompositeMemoryService(BaseMemoryService):
             prev_text = clean_text
 
             ep_meta = dict(custom_metadata or {})
+            cog_types: list[str] = []
             if is_ephemeral:
                 ep_meta["ephemeral"] = True
             else:
                 cog = SmartMemoryClassifier.classify_cognitive_markers(clean_text)
-                if cog["cognitive_types"]:
-                    ep_meta["cognitive_types"] = cog["cognitive_types"]
+                cog_types = list(cog["cognitive_types"])
+                if cog_types:
+                    ep_meta["cognitive_types"] = cog_types
                 if cog["pinned_cognitive"]:
                     ep_meta["pinned_cognitive"] = True
                 if should_defer:
                     ep_meta["extraction_pending"] = True
+
+            now_dt = datetime.now(timezone.utc)
+            explicit_exp = ep_meta.get("expires_at")
+            computed_exp = (
+                str(explicit_exp)
+                if explicit_exp
+                else MemoryReconciliationEngine.compute_default_expiration(
+                    now_dt, cog_types, ctx.tbox.retention_policy
+                )
+            )
+            if computed_exp:
+                ep_meta["expires_at"] = computed_exp
+
+            # Free-text cognitive reconciliation (ADD / UPDATE / RESOLVE / NOOP)
+            reconcile_decision = None
+            if not is_ephemeral:
+                existing_user_eps = await self._fetch_user_episodes_for_reconciliation(ctx)
+                reconcile_decision = MemoryReconciliationEngine.reconcile_episode(
+                    clean_text, existing_user_eps
+                )
+                if reconcile_decision.action == "NOOP":
+                    self.observability.inc("reconcile_noop")
+                    continue
+                if reconcile_decision.action in ("UPDATE", "RESOLVE") and reconcile_decision.target_episode_id:
+                    await self._apply_reconciliation_to_target(
+                        ctx=ctx,
+                        target_episode_id=reconcile_decision.target_episode_id,
+                        action=reconcile_decision.action,
+                        reason=reconcile_decision.reason,
+                        new_content=reconcile_decision.merged_content or clean_text,
+                    )
+                    ep_meta["reconciled_from_episode_id"] = reconcile_decision.target_episode_id
+                    ep_meta["reconciliation_action"] = reconcile_decision.action
+                    self.observability.inc("reconcile_updated")
 
             ep = EpisodicRecord(
                 tenant_id=ctx.tenant_id,
@@ -418,9 +462,28 @@ class CompositeMemoryService(BaseMemoryService):
                 author=author,
                 content_text=clean_text,
                 embedding=vec,
+                created_at=now_dt,
+                expires_at=computed_exp,
                 metadata=ep_meta,
             )
             episodic_records.append(ep)
+            self.memory_revisions.append(
+                MemoryRevisionRecord(
+                    tenant_id=ctx.tenant_id,
+                    app_name=ctx.app_name,
+                    user_id=ctx.user_id,
+                    memory_id=ep.episode_id,
+                    action="ADD",
+                    new_content=clean_text,
+                    reason=(
+                        reconcile_decision.reason
+                        if reconcile_decision
+                        else "Ephemeral turn stored"
+                    ),
+                    actor=author,
+                )
+            )
+            self.observability.inc("episodes_ingested")
             if not is_ephemeral:
                 sanitized_transcript.append(f"{author}: {clean_text}")
 
@@ -551,15 +614,44 @@ class CompositeMemoryService(BaseMemoryService):
                 for s in seeds
             ]
 
+        # Filter out TTL-expired or superseded episodes before serialization
+        now_iso = datetime.now(timezone.utc).isoformat()
+        active_episodes: list[EpisodicRecord] = []
+        for ep in episodes:
+            if ep.metadata.get("reconciled_status") == "SUPERSEDED":
+                continue
+            exp_ts = ep.expires_at or ep.metadata.get("expires_at")
+            if exp_ts and str(exp_ts) <= now_iso:
+                continue
+            active_episodes.append(ep)
+
         # 3. Token-Budgeted Serialization
         graph_block, bounded_episodes = TokenBudgetSerializer.serialize(
             graph_facts,
-            episodes,
+            active_episodes,
             max_tokens=self.max_context_tokens,
             degraded_mode=degraded_mode,
         )
 
         entries: list[MemoryEntry] = []
+        # Prepend Letta-style self-editable Working Memory Blocks if present
+        user_blocks = self.get_working_memory_blocks(
+            f"{ctx.tenant_id}:{ctx.app_name}", ctx.user_id
+        )
+        if user_blocks:
+            blk_lines = ["[WORKING_MEMORY_BLOCKS]"]
+            for blk in user_blocks:
+                blk_lines.append(f"- <{blk.label}>: {blk.value}")
+            entries.append(
+                MemoryEntry(
+                    author="working_memory_blocks",
+                    content=types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text="\n".join(blk_lines))],
+                    ),
+                )
+            )
+        self.observability.inc("searches")
         if matched_playbooks:
             pb_lines = ["[MATCHED_PROCEDURAL_PLAYBOOKS]"]
             for pb in matched_playbooks:
@@ -1076,10 +1168,65 @@ class CompositeMemoryService(BaseMemoryService):
                             )
                             synthesized_dossiers += 1
 
+        # Step 5: TTL Expiration Sweep (InMemory & PostgreSQL)
+        expired_memories = 0
+        now_iso_maint = datetime.now(timezone.utc).isoformat()
+        if hasattr(self.seed_store, "episodes"):
+            eps_list_exp: list[EpisodicRecord] = getattr(self.seed_store, "episodes")
+            unexpired_eps: list[EpisodicRecord] = []
+            for ep in eps_list_exp:
+                exp_ts = ep.expires_at or ep.metadata.get("expires_at")
+                if exp_ts and str(exp_ts) <= now_iso_maint:
+                    expired_memories += 1
+                    self.memory_revisions.append(
+                        MemoryRevisionRecord(
+                            tenant_id=ep.tenant_id,
+                            app_name=ep.app_name,
+                            user_id=ep.user_id,
+                            memory_id=ep.episode_id,
+                            action="EXPIRE",
+                            previous_content=ep.content_text,
+                            reason=f"TTL expired at {exp_ts}",
+                            actor="retention_policy_sweeper",
+                        )
+                    )
+                else:
+                    unexpired_eps.append(ep)
+            setattr(self.seed_store, "episodes", unexpired_eps)
+        elif hasattr(self.seed_store, "_get_pool"):
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                exp_rows = await conn.fetch(
+                    """
+                    DELETE FROM episodic_memories
+                    WHERE custom_metadata ? 'expires_at'
+                      AND (custom_metadata->>'expires_at') <= $1
+                    RETURNING episode_id::text, tenant_id, app_name, user_id, content_text
+                    """,
+                    now_iso_maint,
+                )
+                expired_memories += len(exp_rows)
+                for er in exp_rows:
+                    self.memory_revisions.append(
+                        MemoryRevisionRecord(
+                            tenant_id=er["tenant_id"],
+                            app_name=er["app_name"],
+                            user_id=er["user_id"],
+                            memory_id=er["episode_id"],
+                            action="EXPIRE",
+                            previous_content=er["content_text"],
+                            reason="TTL expired in PostgreSQL",
+                            actor="retention_policy_sweeper",
+                        )
+                    )
+        if expired_memories:
+            self.observability.inc("expired_memories", expired_memories)
+
         return {
             "sleep_time_extracted_batches": sleep_time_extracted_batches,
             "sleep_time_extracted_episodes": sleep_time_extracted_episodes,
             "pruned_ephemeral_episodes": pruned_ephemeral,
+            "expired_memories": expired_memories,
             "compacted_raw_episodes": compacted_episodes,
             "summaries_created": summaries_created,
             "pruned_low_confidence_overflow_edges": pruned_overflow_edges,
@@ -1823,3 +1970,380 @@ class CompositeMemoryService(BaseMemoryService):
             },
             "clarification_hint": clarification_hint,
         }
+
+    # ========================================================================
+    # COGNITIVE LIFECYCLE, MEMORY REVISIONS, MANUAL EDIT & WORKING BLOCKS
+    # ========================================================================
+    async def _fetch_user_episodes_for_reconciliation(
+        self, ctx: PlatformTenantContext, limit: int = 50
+    ) -> list[EpisodicRecord]:
+        if hasattr(self.seed_store, "episodes"):
+            eps_list: list[EpisodicRecord] = getattr(self.seed_store, "episodes")
+            return [
+                ep
+                for ep in eps_list
+                if ep.tenant_id == ctx.tenant_id
+                and ep.user_id == ctx.user_id
+                and ep.app_name == ctx.app_name
+            ][-limit:]
+        if hasattr(self.seed_store, "_get_pool"):
+            import json as _json
+
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT episode_id::text, tenant_id, app_name, user_id, session_id,
+                           namespace, author, content_text, created_at, custom_metadata
+                    FROM episodic_memories
+                    WHERE tenant_id = $1 AND app_name = $2 AND user_id = $3
+                    ORDER BY created_at DESC
+                    LIMIT $4
+                    """,
+                    ctx.tenant_id,
+                    ctx.app_name,
+                    ctx.user_id,
+                    limit,
+                )
+            out: list[EpisodicRecord] = []
+            for r in rows:
+                meta = r["custom_metadata"]
+                if isinstance(meta, str):
+                    meta = _json.loads(meta)
+                out.append(
+                    EpisodicRecord(
+                        episode_id=r["episode_id"],
+                        tenant_id=r["tenant_id"],
+                        app_name=r["app_name"],
+                        user_id=r["user_id"],
+                        session_id=r["session_id"],
+                        namespace=r["namespace"],
+                        author=r["author"],
+                        content_text=r["content_text"],
+                        created_at=r["created_at"],
+                        expires_at=(meta or {}).get("expires_at"),
+                        metadata=dict(meta or {}),
+                    )
+                )
+            return out
+        return []
+
+    async def _apply_reconciliation_to_target(
+        self,
+        ctx: PlatformTenantContext,
+        target_episode_id: str,
+        action: str,
+        reason: str,
+        new_content: str,
+    ) -> None:
+        status_val = "SUPERSEDED" if action == "UPDATE" else "RESOLVED"
+        exp_iso = (
+            datetime.now(timezone.utc)
+            + timedelta(days=ctx.tbox.retention_policy.completed_goal_ttl_days)
+        ).isoformat()
+        prev_text: str | None = None
+        if hasattr(self.seed_store, "episodes"):
+            for ep in getattr(self.seed_store, "episodes"):
+                if ep.episode_id == target_episode_id and ep.tenant_id == ctx.tenant_id:
+                    prev_text = ep.content_text
+                    ep.metadata["reconciled_status"] = status_val
+                    if action == "RESOLVE":
+                        ep.expires_at = exp_iso
+                        ep.metadata["expires_at"] = exp_iso
+                    break
+        elif hasattr(self.seed_store, "_get_pool"):
+            import json as _json
+
+            pool = await getattr(self.seed_store, "_get_pool")()
+            patch: dict[str, Any] = {"reconciled_status": status_val}
+            if action == "RESOLVE":
+                patch["expires_at"] = exp_iso
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE episodic_memories
+                    SET custom_metadata = COALESCE(custom_metadata, '{}'::jsonb) || $3::jsonb
+                    WHERE tenant_id = $1 AND episode_id = $2::uuid
+                    RETURNING content_text
+                    """,
+                    ctx.tenant_id,
+                    target_episode_id,
+                    _json.dumps(patch),
+                )
+                if row:
+                    prev_text = row["content_text"]
+
+        self.memory_revisions.append(
+            MemoryRevisionRecord(
+                tenant_id=ctx.tenant_id,
+                app_name=ctx.app_name,
+                user_id=ctx.user_id,
+                memory_id=target_episode_id,
+                action="UPDATE" if action == "UPDATE" else "RESOLVE",
+                previous_content=prev_text,
+                new_content=new_content,
+                reason=reason,
+                actor="memory_reconciliation_engine",
+            )
+        )
+
+    async def list_user_memories(
+        self,
+        app_name: str,
+        user_id: str,
+        *,
+        include_expired: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Lists stored episodic memories for inspection in the Console UI or API."""
+        tenant_id, clean_app = self._split_tenant_app(app_name)
+        ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
+        eps = await self._fetch_user_episodes_for_reconciliation(ctx, limit=limit)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        results: list[dict[str, Any]] = []
+        for ep in eps:
+            exp_ts = ep.expires_at or ep.metadata.get("expires_at")
+            is_expired = bool(exp_ts and str(exp_ts) <= now_iso)
+            if is_expired and not include_expired:
+                continue
+            results.append(
+                {
+                    "episode_id": ep.episode_id,
+                    "tenant_id": ep.tenant_id,
+                    "app_name": ep.app_name,
+                    "user_id": ep.user_id,
+                    "session_id": ep.session_id,
+                    "namespace": ep.namespace,
+                    "author": ep.author,
+                    "content_text": ep.content_text,
+                    "created_at": ep.created_at.isoformat(),
+                    "expires_at": exp_ts,
+                    "metadata": ep.metadata,
+                }
+            )
+        return results
+
+    async def edit_user_memory(
+        self,
+        app_name: str,
+        user_id: str,
+        episode_id: str,
+        new_content: str,
+        *,
+        actor: str = "operator",
+        reason: str = "Manual edit via Console/API",
+    ) -> dict[str, Any]:
+        """Manually edits a stored memory, re-embeds it, and records an immutable MemoryRevisionRecord."""
+        tenant_id, clean_app = self._split_tenant_app(app_name)
+        clean_new = PIIScrubber.scrub(new_content)
+        new_vec = await self.embedder.embed(clean_new)
+        prev_text: str | None = None
+        found = False
+        if hasattr(self.seed_store, "episodes"):
+            for ep in getattr(self.seed_store, "episodes"):
+                if (
+                    ep.episode_id == episode_id
+                    and ep.tenant_id == tenant_id
+                    and ep.user_id == user_id
+                ):
+                    prev_text = ep.content_text
+                    ep.content_text = clean_new
+                    ep.embedding = new_vec
+                    ep.metadata["manually_edited"] = True
+                    found = True
+                    break
+        elif hasattr(self.seed_store, "_get_pool"):
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT content_text FROM episodic_memories
+                    WHERE tenant_id = $1 AND user_id = $2 AND episode_id = $3::uuid
+                    """,
+                    tenant_id,
+                    user_id,
+                    episode_id,
+                )
+                if row:
+                    prev_text = row["content_text"]
+                    await conn.execute(
+                        """
+                        UPDATE episodic_memories
+                        SET content_text = $4,
+                            embedding = $5::vector,
+                            custom_metadata = COALESCE(custom_metadata, '{}'::jsonb) || '{"manually_edited": true}'::jsonb
+                        WHERE tenant_id = $1 AND user_id = $2 AND episode_id = $3::uuid
+                        """,
+                        tenant_id,
+                        user_id,
+                        episode_id,
+                        clean_new,
+                        str(new_vec),
+                    )
+                    found = True
+
+        if not found:
+            raise ValueError(f"Episode '{episode_id}' not found for user '{user_id}'")
+
+        rev = MemoryRevisionRecord(
+            tenant_id=tenant_id,
+            app_name=clean_app,
+            user_id=user_id,
+            memory_id=episode_id,
+            action="MANUAL_EDIT",
+            previous_content=prev_text,
+            new_content=clean_new,
+            reason=reason,
+            actor=actor,
+        )
+        self.memory_revisions.append(rev)
+        self.observability.inc("manual_edits")
+        return {"status": "updated", "episode_id": episode_id, "revision": rev.model_dump()}
+
+    async def delete_user_memory(
+        self,
+        app_name: str,
+        user_id: str,
+        episode_id: str,
+        *,
+        actor: str = "operator",
+        reason: str = "Manual delete via Console/API",
+    ) -> dict[str, Any]:
+        """Deletes a single memory record and logs an immutable DELETE MemoryRevisionRecord."""
+        tenant_id, clean_app = self._split_tenant_app(app_name)
+        prev_text: str | None = None
+        found = False
+        if hasattr(self.seed_store, "episodes"):
+            eps_list: list[EpisodicRecord] = getattr(self.seed_store, "episodes")
+            kept: list[EpisodicRecord] = []
+            for ep in eps_list:
+                if (
+                    ep.episode_id == episode_id
+                    and ep.tenant_id == tenant_id
+                    and ep.user_id == user_id
+                ):
+                    prev_text = ep.content_text
+                    found = True
+                else:
+                    kept.append(ep)
+            setattr(self.seed_store, "episodes", kept)
+        elif hasattr(self.seed_store, "_get_pool"):
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    DELETE FROM episodic_memories
+                    WHERE tenant_id = $1 AND user_id = $2 AND episode_id = $3::uuid
+                    RETURNING content_text
+                    """,
+                    tenant_id,
+                    user_id,
+                    episode_id,
+                )
+                if row:
+                    prev_text = row["content_text"]
+                    found = True
+
+        if not found:
+            raise ValueError(f"Episode '{episode_id}' not found for user '{user_id}'")
+
+        rev = MemoryRevisionRecord(
+            tenant_id=tenant_id,
+            app_name=clean_app,
+            user_id=user_id,
+            memory_id=episode_id,
+            action="DELETE",
+            previous_content=prev_text,
+            reason=reason,
+            actor=actor,
+        )
+        self.memory_revisions.append(rev)
+        self.observability.inc("manual_deletes")
+        return {"status": "deleted", "episode_id": episode_id, "revision": rev.model_dump()}
+
+    def get_memory_revisions(
+        self,
+        app_name: str | None = None,
+        user_id: str | None = None,
+        limit: int = 100,
+    ) -> list[MemoryRevisionRecord]:
+        """Returns immutable memory revision audit records (Vertex AI Memory Bank Revisions parity)."""
+        tenant_filter: str | None = None
+        app_filter: str | None = None
+        if app_name:
+            tenant_filter, app_filter = self._split_tenant_app(app_name)
+        out: list[MemoryRevisionRecord] = []
+        for rev in reversed(self.memory_revisions):
+            if tenant_filter and rev.tenant_id != tenant_filter:
+                continue
+            if app_filter and rev.app_name != app_filter:
+                continue
+            if user_id and rev.user_id != user_id:
+                continue
+            out.append(rev)
+            if len(out) >= limit:
+                break
+        return out
+
+    def get_working_memory_blocks(
+        self, app_name: str, user_id: str
+    ) -> list[WorkingMemoryBlock]:
+        """Returns all Letta-style self-editable Core Working Memory Blocks for this user/app."""
+        tenant_id, clean_app = self._split_tenant_app(app_name)
+        return [
+            blk
+            for (t, a, u, _lbl), blk in self.working_memory_blocks.items()
+            if t == tenant_id and a == clean_app and u == user_id
+        ]
+
+    def upsert_working_memory_block(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        label: str,
+        value: str,
+        mode: str = "replace",
+        max_chars: int = 2000,
+        actor: str = "agent",
+    ) -> WorkingMemoryBlock:
+        """
+        Letta / MemGPT-style self-editing Core Working Memory Block (`replace` or `append`).
+        Automatically PII-scrubs the block value and bounds it to `max_chars`.
+        """
+        tenant_id, clean_app = self._split_tenant_app(app_name)
+        clean_val = PIIScrubber.scrub(value)
+        key = (tenant_id, clean_app, user_id, label)
+        existing = self.working_memory_blocks.get(key)
+        prev_val = existing.value if existing else None
+        if existing and mode == "append":
+            combined = f"{existing.value}\n{clean_val}".strip() if existing.value else clean_val
+        else:
+            combined = clean_val
+        bounded = combined[:max_chars]
+        blk = WorkingMemoryBlock(
+            block_id=existing.block_id if existing else f"blk_{uuid.uuid4().hex[:10]}",
+            tenant_id=tenant_id,
+            app_name=clean_app,
+            user_id=user_id,
+            label=label,
+            value=bounded,
+            max_chars=max_chars,
+            updated_by=actor,
+        )
+        self.working_memory_blocks[key] = blk
+        self.memory_revisions.append(
+            MemoryRevisionRecord(
+                tenant_id=tenant_id,
+                app_name=clean_app,
+                user_id=user_id,
+                memory_id=f"block:{label}",
+                action="UPDATE" if existing else "ADD",
+                previous_content=prev_val,
+                new_content=bounded,
+                reason=f"Working memory block '{label}' ({mode})",
+                actor=actor,
+            )
+        )
+        self.observability.inc("working_blocks_updated")
+        return blk

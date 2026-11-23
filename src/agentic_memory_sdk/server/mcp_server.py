@@ -38,6 +38,9 @@ class MemoryMcpServerTools:
         "run_memory_maintenance",
         "inspect_platform_governance",
         "purge_user_lineage",
+        "edit_working_memory_block",
+        "list_user_memories",
+        "get_memory_revisions",
     ]
 
     RESOURCE_URIS: list[str] = [
@@ -403,6 +406,55 @@ class MemoryMcpServerTools:
             "purged_episode_ids": purged_ids,
         }
 
+    async def edit_working_memory_block(
+        self,
+        app_name: str,
+        user_id: str,
+        label: str,
+        value: str,
+        mode: str = "replace",
+        max_chars: int = 2000,
+    ) -> dict[str, Any]:
+        """Letta/MemGPT-style self-editable Core Working Memory Block (`replace` or `append`)."""
+        blk = self.service.upsert_working_memory_block(
+            app_name=app_name,
+            user_id=user_id,
+            label=label,
+            value=value,
+            mode=mode,
+            max_chars=max_chars,
+            actor="mcp_agent",
+        )
+        return {"status": "saved", "block": blk.model_dump()}
+
+    async def list_user_memories(
+        self,
+        app_name: str,
+        user_id: str,
+        include_expired: bool = False,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Lists stored episodic & cognitive memories for a user/app."""
+        items = await self.service.list_user_memories(
+            app_name=app_name,
+            user_id=user_id,
+            include_expired=include_expired,
+            limit=limit,
+        )
+        return {"count": len(items), "memories": items}
+
+    async def get_memory_revisions(
+        self,
+        app_name: str | None = None,
+        user_id: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Returns immutable memory revision audit records (ADD/UPDATE/RESOLVE/EXPIRE/DELETE/MANUAL_EDIT)."""
+        revs = self.service.get_memory_revisions(
+            app_name=app_name, user_id=user_id, limit=limit
+        )
+        return {"count": len(revs), "revisions": [r.model_dump() for r in revs]}
+
 
 def create_mcp_server(
     service: CompositeMemoryService,
@@ -684,6 +736,51 @@ def create_mcp_server(
         ),
         structured_output=True,
     )(tools.purge_user_lineage)
+
+    mcp.tool(
+        name="edit_working_memory_block",
+        title="Edit Core Working Memory Block (Letta-style)",
+        description=(
+            "Create, replace, or append to a pinned Core Working Memory Block "
+            "that is automatically injected at the top of future recall_context calls."
+        ),
+        annotations=_ann(
+            "Edit Core Working Memory Block",
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
+    )(tools.edit_working_memory_block)
+
+    mcp.tool(
+        name="list_user_memories",
+        title="List User Episodic & Cognitive Memories",
+        description="Inspect stored episodic memories, cognitive markers, and TTL metadata for a user.",
+        annotations=_ann(
+            "List User Memories",
+            read_only=True,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
+    )(tools.list_user_memories)
+
+    mcp.tool(
+        name="get_memory_revisions",
+        title="Get Immutable Memory Revisions Audit Trail",
+        description="Retrieve immutable ADD/UPDATE/RESOLVE/EXPIRE/DELETE/MANUAL_EDIT revision history.",
+        annotations=_ann(
+            "Get Memory Revisions",
+            read_only=True,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        ),
+        structured_output=True,
+    )(tools.get_memory_revisions)
 
     # -------------------------------------------------------------------------
     # 2. MCP RESOURCES (`resources/list`, `resources/templates/list`, `resources/read`)

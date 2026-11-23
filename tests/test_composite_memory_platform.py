@@ -1538,10 +1538,11 @@ async def test_latest_mcp_protocol_2026_07_28_and_2025_11_25_streamable_http():
         assert meta_resp.status_code == 200
         meta_json = meta_resp.json()
         assert meta_json["protocol_version"] == "2026-07-28"
-        assert len(meta_json["tools"]) == 14
+        assert len(meta_json["tools"]) == 17
         assert "induce_domain_pack" in meta_json["tools"]
         assert "check_answerable" in meta_json["tools"]
         assert "certify_domain_pack" in meta_json["tools"]
+        assert "edit_working_memory_block" in meta_json["tools"]
         assert len(meta_json["resources"]) == 4
         assert len(meta_json["prompts"]) == 2
 
@@ -1556,7 +1557,7 @@ async def test_latest_mcp_protocol_2026_07_28_and_2025_11_25_streamable_http():
         )
         assert r_tools.status_code == 200
         tools_list = r_tools.json()["result"]["tools"]
-        assert len(tools_list) == 14
+        assert len(tools_list) == 17
         by_name = {t["name"]: t for t in tools_list}
         assert by_name["recall_context"]["annotations"]["readOnlyHint"] is True
         assert by_name["recall_context"]["annotations"]["destructiveHint"] is False
@@ -2390,6 +2391,242 @@ async def test_layer0_cognitive_memory_primitives_guardrails_hypotheses_lessons_
     )
     assert TokenBudgetSerializer.compute_salience(guardrail_fact) > TokenBudgetSerializer.compute_salience(standard_fact)
     assert TokenBudgetSerializer.compute_salience(standard_fact) > TokenBudgetSerializer.compute_salience(hypothesis_fact)
+
+
+@pytest.mark.asyncio
+async def test_v020_reconciliation_ttl_working_blocks_rbac_jwt_console_ui_and_metrics():
+    """
+    End-to-end validation of the v0.2.0 enterprise parity layers:
+      1. Free-text cognitive memory reconciliation (`ADD -> UPDATE -> RESOLVE -> NOOP`) & Memory Revisions.
+      2. Configurable `MemoryRetentionPolicy` TTL sweep & few-shot / custom-topic prompt injection.
+      3. Letta-style self-editable Core Working Memory Blocks (`replace` / `append` + recall injection).
+      4. Manual memory inspection, inline edit (re-embed + `MANUAL_EDIT` revision), and delete.
+      5. Enterprise API AuthN/AuthZ (HS256 JWT + API-Key + RBAC + cross-tenant isolation).
+      6. Bundled Visual Console UI (`GET /ui`), OpenTelemetry/Prometheus metrics (`/v1/metrics`, `/metrics`),
+         and 17-tool MCP Server parity.
+    """
+    from datetime import datetime, timedelta, timezone
+    import httpx
+    from agentic_memory_sdk import (
+        AuthPolicyConfig,
+        AuthPrincipal,
+        FewShotExtractionExample,
+        GeminiOntologyExtractorAdapter,
+        MemoryRetentionPolicy,
+        MemoryRole,
+        mint_hs256_jwt,
+    )
+
+    store = InMemoryUnifiedAdapter()
+    service = CompositeMemoryService(
+        registry_adapter=store,
+        seed_store_adapter=store,
+        graph_adapter=store,
+        embedding_adapter=DeterministicHashEmbeddingAdapter(),
+        extractor_adapter=RuleBasedMockExtractorAdapter(),
+    )
+    registrar = PlatformOntologyRegistrar(store)
+    tbox = await registrar.register_adk_app(
+        AppMemoryManifest(
+            tenant_id="acme",
+            app_name="concierge",
+            governance_tier=GovernanceTier.TIER1_APP_TYPED,
+            retention_policy=MemoryRetentionPolicy(
+                hypothesis_ttl_days=7,
+                completed_goal_ttl_days=14,
+            ),
+            custom_extraction_topics=["Travel dietary preferences", "SLA commitments"],
+            few_shot_examples=[
+                FewShotExtractionExample(
+                    input_text="I prefer window seats on transatlantic flights.",
+                    expected_entities=[{"canonical_name": "Window-Seat", "entity_class": "p:UserPreference"}],
+                    expected_facts=[],
+                    notes="Personal travel preference",
+                )
+            ],
+        )
+    )
+
+    # 1. Verify custom topics & few-shot examples are injected into the TBox LLM prompt
+    sys_prompt = GeminiOntologyExtractorAdapter.build_tbox_system_instruction(tbox)
+    assert "CUSTOM PRIORITY EXTRACTION TOPICS" in sys_prompt
+    assert "Travel dietary preferences" in sys_prompt
+    assert "FEW-SHOT EXTRACTION EXAMPLES" in sys_prompt
+    assert "Window-Seat" in sys_prompt
+
+    # 2. Free-text Reconciliation (`ADD` -> `NOOP` -> `UPDATE` -> `RESOLVE`)
+    app_id = "acme:concierge"
+    await service.add_events_to_memory(
+        app_name=app_id,
+        user_id="maya",
+        events=[_make_event("My preference is vegetarian meals on business flights.")],
+    )
+    # Duplicate turn -> NOOP (should not create duplicate episode)
+    before_dup = len(store.episodes)
+    await service.add_events_to_memory(
+        app_name=app_id,
+        user_id="maya",
+        events=[_make_event("My preference is vegetarian meals on business flights.")],
+    )
+    assert len(store.episodes) == before_dup
+
+    # Conflicting preference update -> UPDATE supersedes vegetarian episode
+    await service.add_events_to_memory(
+        app_name=app_id,
+        user_id="maya",
+        events=[_make_event("I switched from vegetarian meals to pescatarian meals on business flights.")],
+    )
+    # Goal + Resolution -> RESOLVE
+    await service.add_events_to_memory(
+        app_name=app_id,
+        user_id="maya",
+        events=[_make_event("Pending goal: renew passport before Tokyo summit.")],
+    )
+    await service.add_events_to_memory(
+        app_name=app_id,
+        user_id="maya",
+        events=[_make_event("Completed renew passport before Tokyo summit.")],
+    )
+
+    # Expired TTL episode -> swept during run_memory_maintenance()
+    expired_iso = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    await service.add_events_to_memory(
+        app_name=app_id,
+        user_id="maya",
+        events=[_make_event("Ephemeral one-day gate code GATE-404.")],
+        custom_metadata={"expires_at": expired_iso},
+    )
+    maint = await service.run_memory_maintenance(min_episodes_to_compact=20)
+    assert maint["expired_memories"] == 1
+
+    # 3. Working Memory Blocks (replace + append) injected into search_memory
+    service.upsert_working_memory_block(
+        app_name=app_id,
+        user_id="maya",
+        label="human_profile",
+        value="Maya Lin — VP Engineering",
+        mode="replace",
+    )
+    service.upsert_working_memory_block(
+        app_name=app_id,
+        user_id="maya",
+        label="human_profile",
+        value="Prefers concise bullet summaries.",
+        mode="append",
+    )
+    recalled = await service.search_memory(app_name=app_id, user_id="maya", query="business flights")
+    recalled_blob = "\n".join(m.content.parts[0].text for m in recalled.memories)
+    assert "[WORKING_MEMORY_BLOCKS]" in recalled_blob
+    assert "Maya Lin — VP Engineering" in recalled_blob
+    assert "Prefers concise bullet summaries." in recalled_blob
+    assert "pescatarian" in recalled_blob.lower()
+    assert "GATE-404" not in recalled_blob
+
+    revs = service.get_memory_revisions(app_name=app_id, user_id="maya")
+    rev_actions = {r.action for r in revs}
+    assert {"ADD", "UPDATE", "RESOLVE", "EXPIRE"}.issubset(rev_actions)
+
+    # 4. Enterprise FastAPI AuthN/AuthZ (JWT HS256 + API Key + RBAC + Tenant Isolation) + Console UI + Metrics
+    jwt_secret = "unit-test-super-secret-key"
+    auth_policy = AuthPolicyConfig(
+        enabled=True,
+        jwt_secret=jwt_secret,
+        jwt_issuer="acme-idp",
+        api_keys={
+            "admin-key-acme": AuthPrincipal(
+                subject="ops-admin",
+                tenant_id="acme",
+                roles=[MemoryRole.PLATFORM_ADMIN],
+            ),
+        },
+    )
+    agent_jwt = mint_hs256_jwt(
+        {"sub": "concierge-bot", "tenant_id": "acme", "roles": ["agent"], "iss": "acme-idp"},
+        secret=jwt_secret,
+    )
+    other_tenant_jwt = mint_hs256_jwt(
+        {"sub": "other-bot", "tenant_id": "globex", "roles": ["agent"], "iss": "acme-idp"},
+        secret=jwt_secret,
+    )
+
+    app = create_memory_platform_app(
+        service=service,
+        registrar=registrar,
+        enable_outbox_worker=False,
+        auth_policy=auth_policy,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test.local") as client:
+        # Public Console UI & Health work without token
+        ui_resp = await client.get("/ui")
+        assert ui_resp.status_code == 200
+        assert "Agentic Composite Memory Console" in ui_resp.text
+
+        # Unauthenticated API request -> 401
+        unauth = await client.get(f"/v1/memory/items?app_name={app_id}&user_id=maya")
+        assert unauth.status_code == 401
+
+        # Cross-tenant JWT spoofing -> 403 Tenant Isolation Violation
+        cross_tenant = await client.get(
+            f"/v1/memory/items?app_name={app_id}&user_id=maya",
+            headers={"Authorization": f"Bearer {other_tenant_jwt}"},
+        )
+        assert cross_tenant.status_code == 403
+        assert "Tenant isolation violation" in cross_tenant.json()["detail"]
+
+        # Agent JWT can read items & edit working blocks, but CANNOT run GDPR purge (403 RBAC)
+        items_resp = await client.get(
+            f"/v1/memory/items?app_name={app_id}&user_id=maya",
+            headers={"Authorization": f"Bearer {agent_jwt}"},
+        )
+        assert items_resp.status_code == 200
+        items = items_resp.json()["memories"]
+        assert len(items) >= 2
+
+        purge_denied = await client.post(
+            "/v1/memory/purge",
+            json={"app_name": app_id, "user_id": "maya"},
+            headers={"Authorization": f"Bearer {agent_jwt}"},
+        )
+        assert purge_denied.status_code == 403
+
+        # Admin API Key can inline-edit & delete memory, inspect revisions & Prometheus metrics
+        target_ep_id = items[0]["episode_id"]
+        edit_resp = await client.put(
+            f"/v1/memory/items/{target_ep_id}",
+            json={
+                "app_name": app_id,
+                "user_id": "maya",
+                "new_content": "Manually verified memory content by steward.",
+                "actor": "ops-admin",
+            },
+            headers={"X-API-Key": "admin-key-acme"},
+        )
+        assert edit_resp.status_code == 200
+        assert edit_resp.json()["revision"]["action"] == "MANUAL_EDIT"
+
+        del_resp = await client.delete(
+            f"/v1/memory/items/{target_ep_id}?app_name={app_id}&user_id=maya",
+            headers={"X-API-Key": "admin-key-acme"},
+        )
+        assert del_resp.status_code == 200
+        assert del_resp.json()["revision"]["action"] == "DELETE"
+
+        metrics_json = await client.get("/v1/metrics", headers={"X-API-Key": "admin-key-acme"})
+        assert metrics_json.status_code == 200
+        assert metrics_json.json()["counters"]["manual_edits"] >= 1
+        assert metrics_json.json()["counters"]["auth_denied"] >= 1
+
+        metrics_prom = await client.get("/metrics", headers={"X-API-Key": "admin-key-acme"})
+        assert metrics_prom.status_code == 200
+        assert "adk_memory_episodes_ingested_total" in metrics_prom.text
+
+        # Verify 17 MCP tools registered
+        mcp_list = await client.get("/v1/mcp/tools", headers={"X-API-Key": "admin-key-acme"})
+        assert mcp_list.status_code == 200
+        assert len(mcp_list.json()["tools"]) == 17
+        assert "edit_working_memory_block" in mcp_list.json()["tools"]
+
 
 
 

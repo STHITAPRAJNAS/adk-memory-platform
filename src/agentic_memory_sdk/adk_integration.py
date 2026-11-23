@@ -342,6 +342,103 @@ class RemoteCompositeMemoryService(BaseMemoryService):
             {"pack_id": pack_id, "certified_by": certified_by},
         )
 
+    async def list_user_memories(
+        self, app_name: str, user_id: str, include_expired: bool = False, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Lists stored episodic & cognitive memories for inspection via REST."""
+        res = await self._request(
+            "GET",
+            f"/v1/memory/items?app_name={app_name}&user_id={user_id}&include_expired={str(include_expired).lower()}&limit={limit}",
+        )
+        return list(res.get("memories", []))
+
+    async def edit_user_memory(
+        self,
+        app_name: str,
+        user_id: str,
+        episode_id: str,
+        new_content: str,
+        actor: str = "operator",
+        reason: str = "Manual edit via RemoteClient",
+    ) -> dict[str, Any]:
+        """Manually edits a stored memory record over REST and logs an immutable revision."""
+        return await self._request(
+            "PUT",
+            f"/v1/memory/items/{episode_id}",
+            {
+                "app_name": app_name,
+                "user_id": user_id,
+                "new_content": new_content,
+                "actor": actor,
+                "reason": reason,
+            },
+        )
+
+    async def delete_user_memory(
+        self,
+        app_name: str,
+        user_id: str,
+        episode_id: str,
+        actor: str = "operator",
+        reason: str = "Manual delete via RemoteClient",
+    ) -> dict[str, Any]:
+        """Deletes a single memory record over REST and logs an immutable DELETE revision."""
+        return await self._request(
+            "DELETE",
+            f"/v1/memory/items/{episode_id}?app_name={app_name}&user_id={user_id}&actor={actor}&reason={reason}",
+        )
+
+    async def get_memory_revisions(
+        self, app_name: str | None = None, user_id: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Fetches immutable memory revision history over REST."""
+        params = [f"limit={limit}"]
+        if app_name:
+            params.append(f"app_name={app_name}")
+        if user_id:
+            params.append(f"user_id={user_id}")
+        res = await self._request("GET", "/v1/memory/revisions?" + "&".join(params))
+        return list(res.get("revisions", []))
+
+    async def get_working_memory_blocks(
+        self, app_name: str, user_id: str
+    ) -> list[dict[str, Any]]:
+        """Lists Letta-style Core Working Memory Blocks for a user/app over REST."""
+        res = await self._request(
+            "GET", f"/v1/memory/blocks?app_name={app_name}&user_id={user_id}"
+        )
+        return list(res.get("blocks", []))
+
+    async def upsert_working_memory_block(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        label: str,
+        value: str,
+        mode: str = "replace",
+        max_chars: int = 2000,
+        actor: str = "agent",
+    ) -> dict[str, Any]:
+        """Creates, replaces, or appends to a Letta-style Core Working Memory Block over REST."""
+        return await self._request(
+            "POST",
+            "/v1/memory/blocks",
+            {
+                "app_name": app_name,
+                "user_id": user_id,
+                "label": label,
+                "value": value,
+                "mode": mode,
+                "max_chars": max_chars,
+                "actor": actor,
+            },
+        )
+
+    async def get_metrics(self) -> dict[str, Any]:
+        """Fetches OpenTelemetry-compatible platform counters and latency histograms."""
+        return await self._request("GET", "/v1/metrics")
+
 
 # ============================================================================
 # DROP-IN GOOGLE ADK CALLBACKS & EXPLICIT AGENT TOOLS

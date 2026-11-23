@@ -87,7 +87,14 @@ from agentic_memory_sdk import CompositeMemoryService, RemoteCompositeMemoryServ
    - Google **Gemini**, **Amazon Bedrock** (Converse API + Titan/Cohere Embeddings), **OpenAI / Azure OpenAI / vLLM**, **Ollama**, and local **SentenceTransformers**.
 
 6. **100% Data-Plane + Control-Plane Parity Across SDK, FastAPI & MCP (`2026-07-28` / `2025-11-25`)**:
-   - `adk-memory serve-api` co-hosts both REST (`/v1/...`) and the latest **MCP `2026-07-28` Stateless Request/Response Core & `2025-11-25` Streamable HTTP** (`/mcp/http/`, `/mcp/sse`, `/v1/mcp/tools`, `/v1/mcp/call`) with **11 Annotated Tools**, **4 Live Resources**, and **2 Workflow Prompts**.
+   - `adk-memory serve-api` co-hosts REST (`/v1/...`), the latest **MCP `2026-07-28` Stateless Request/Response Core & `2025-11-25` Streamable HTTP** (`/mcp/http/`, `/mcp/sse`, `/v1/mcp/tools`, `/v1/mcp/call`) with **17 Annotated Tools**, **4 Live Resources**, and **2 Workflow Prompts**, plus a bundled **Visual Memory & Ontology Governance Console UI (`GET /ui`)**.
+
+7. **Enterprise Parity Layers (`v0.2.0`)**:
+   - **Free-Text Cognitive Reconciliation & Immutable Memory Revisions (`MemoryReconciliationEngine`, `MemoryRevisionRecord`)**: Reconciles non-functional preferences, goals, and lessons (`ADD / UPDATE / RESOLVE / DELETE / NOOP`), supports manual inline edit/delete (`PUT/DELETE /v1/memory/items/{id}`), and tracks immutable revisions (`GET /v1/memory/revisions`).
+   - **Configurable Retention TTL & Few-Shot Custom Topics (`MemoryRetentionPolicy`, `FewShotExtractionExample`)**: Per-app TTL expiration sweeps in `run_memory_maintenance()`, exponential recency decay, and Vertex AI Memory Bank-style custom extraction topics + few-shot prompt examples.
+   - **Letta-Style Self-Editable Core Working Memory Blocks (`WorkingMemoryBlock`)**: Agents or operators can `replace` or `append` pinned working blocks (`POST /v1/memory/blocks`, MCP `edit_working_memory_block`) automatically injected as `[WORKING_MEMORY_BLOCKS]`.
+   - **API AuthN/AuthZ (JWT HS256 / API-Key / Pluggable OIDC + RBAC + Tenant Isolation) & Observability (`security.py`)**: Enforce `READER` / `AGENT` / `ONTOLOGY_STEWARD` / `COMPLIANCE_ADMIN` / `PLATFORM_ADMIN` roles and prevent cross-tenant spoofing, with OpenTelemetry auto-detection plus `GET /v1/metrics` and `GET /metrics` (Prometheus).
+   - **LoCoMo / LongMemEval Evaluation Harness (`examples/locomo_longmemeval_harness.py`)**: 6-category standardized benchmark supporting `--mode deterministic`, `--mode gemini`, `--mode openai`, and `--mode ollama`.
 
 ---
 
