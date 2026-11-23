@@ -2720,6 +2720,166 @@ async def test_builtin_configurable_sleep_time_maintenance_worker_and_fastapi_li
     assert service.maintenance_worker_running is False
 
 
+@pytest.mark.asyncio
+async def test_v022_security_hardening_tenant_smuggling_mcp_rbac_jwt_claims_and_complete_gdpr_purge():
+    """
+    Security regression test validating every critical/high hardening fix in v0.2.2:
+      1. Query-vs-body tenant smuggling blocked (`?app_name=tenant_a:app` + body `tenant_b:app` -> 403).
+      2. `/v1/mcp/call` enforces BOTH per-tool RBAC AND tenant/user isolation inside `arguments`.
+      3. Actual routes (`/v1/lineage/purge`, `/v1/traces`, `/v1/apps/{tenant}/{app}`) enforce exact RBAC & tenant isolation.
+      4. JWTs without `exp` or without `tenant_id` are strictly rejected (`401`).
+      5. Complete GDPR `purge_user_lineage` erases user text from Episodic, Graph, Working Memory Blocks, AND Revision History.
+      6. `adk-memory serve-api --host 0.0.0.0` refuses to start without auth enabled.
+    """
+    import base64
+    import hashlib
+    import hmac
+    import json
+    import time
+    import httpx
+    from agentic_memory_sdk import (
+        AuthPolicyConfig,
+        MemoryRole,
+        mint_hs256_jwt,
+    )
+    from agentic_memory_sdk.cli import main as cli_main
+
+    store = InMemoryUnifiedAdapter()
+    service = CompositeMemoryService(
+        registry_adapter=store,
+        seed_store_adapter=store,
+        graph_adapter=store,
+        embedding_adapter=DeterministicHashEmbeddingAdapter(),
+        extractor_adapter=RuleBasedMockExtractorAdapter(),
+    )
+    registrar = PlatformOntologyRegistrar(store)
+    await registrar.register_adk_app(AppMemoryManifest(tenant_id="tenant_a", app_name="app"))
+    await registrar.register_adk_app(AppMemoryManifest(tenant_id="tenant_b", app_name="app"))
+
+    # Seed secret memory in tenant_b and user data + working block in tenant_a
+    await service.add_events_to_memory(
+        app_name="tenant_b:app",
+        user_id="bob",
+        events=[_make_event("TOP SECRET tenant_b launch code ALPHA-999.")],
+    )
+    await service.add_events_to_memory(
+        app_name="tenant_a:app",
+        user_id="alice",
+        events=[_make_event("Alice private medical note for GDPR purge test.")],
+    )
+    await service.async_upsert_working_memory_block(
+        app_name="tenant_a:app",
+        user_id="alice",
+        label="private_notes",
+        value="Alice sensitive working scratchpad text.",
+    )
+
+    secret = "hardened-test-secret"
+    auth_policy = AuthPolicyConfig(enabled=True, jwt_secret=secret)
+    reader_a_jwt = mint_hs256_jwt(
+        {"sub": "reader-a", "tenant_id": "tenant_a", "roles": [MemoryRole.READER.value]},
+        secret=secret,
+    )
+
+    def _raw_jwt(payload: dict) -> str:
+        def _b64(obj: dict) -> str:
+            return base64.urlsafe_b64encode(json.dumps(obj, separators=(",", ":")).encode()).rstrip(b"=").decode()
+        h = _b64({"alg": "HS256", "typ": "JWT"})
+        p = _b64(payload)
+        sig = base64.urlsafe_b64encode(
+            hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
+        ).rstrip(b"=").decode()
+        return f"{h}.{p}.{sig}"
+
+    jwt_no_exp = _raw_jwt({"sub": "bad1", "tenant_id": "tenant_a", "roles": ["reader"]})
+    jwt_no_tenant = _raw_jwt({"sub": "bad2", "roles": ["reader"], "exp": int(time.time()) + 3600})
+
+    app = create_memory_platform_app(
+        service=service,
+        registrar=registrar,
+        enable_outbox_worker=False,
+        auth_policy=auth_policy,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test.local"
+    ) as client:
+        # 1. Query-vs-body tenant smuggling MUST be blocked (403)
+        smuggle = await client.post(
+            "/v1/memory/search?app_name=tenant_a:app",
+            json={"app_name": "tenant_b:app", "user_id": "bob", "query": "launch code"},
+            headers={"Authorization": f"Bearer {reader_a_jwt}"},
+        )
+        assert smuggle.status_code == 403
+
+        # 2. /v1/mcp/call cross-tenant read MUST be blocked (403)
+        mcp_cross = await client.post(
+            "/v1/mcp/call",
+            json={
+                "tool_name": "recall_context",
+                "arguments": {"app_name": "tenant_b:app", "user_id": "bob", "query": "launch code"},
+            },
+            headers={"Authorization": f"Bearer {reader_a_jwt}"},
+        )
+        assert mcp_cross.status_code == 403
+
+        # 3. /v1/mcp/call RBAC for destructive tool MUST be blocked for READER (403)
+        mcp_purge = await client.post(
+            "/v1/mcp/call",
+            json={
+                "tool_name": "purge_user_lineage",
+                "arguments": {"app_name": "tenant_a:app", "user_id": "alice"},
+            },
+            headers={"Authorization": f"Bearer {reader_a_jwt}"},
+        )
+        assert mcp_purge.status_code == 403
+
+        # 4. Real route /v1/lineage/purge, /v1/traces, and /v1/apps/{tenant}/{app} RBAC & isolation
+        purge_real = await client.post(
+            "/v1/lineage/purge",
+            json={"app_name": "tenant_b:app", "user_id": "bob"},
+            headers={"Authorization": f"Bearer {reader_a_jwt}"},
+        )
+        assert purge_real.status_code == 403
+
+        trace_denied = await client.post(
+            "/v1/traces",
+            json={"app_name": "tenant_a:app", "user_id": "alice", "run_id": "r1", "session_id": "s1", "steps": []},
+            headers={"Authorization": f"Bearer {reader_a_jwt}"},
+        )
+        assert trace_denied.status_code == 403
+
+        path_cross = await client.get(
+            "/v1/apps/tenant_b/app",
+            headers={"Authorization": f"Bearer {reader_a_jwt}"},
+        )
+        assert path_cross.status_code == 403
+
+        # 5. JWT without `exp` or without `tenant_id` MUST be rejected (401)
+        r_no_exp = await client.get(
+            "/v1/memory/items?app_name=tenant_a:app&user_id=alice",
+            headers={"Authorization": f"Bearer {jwt_no_exp}"},
+        )
+        assert r_no_exp.status_code == 401
+
+        r_no_tenant = await client.get(
+            "/v1/memory/items?app_name=tenant_a:app&user_id=alice",
+            headers={"Authorization": f"Bearer {jwt_no_tenant}"},
+        )
+        assert r_no_tenant.status_code == 401
+
+    # 6. Complete GDPR purge erases working memory blocks AND memory revisions
+    assert len(await service.async_get_working_memory_blocks("tenant_a:app", "alice")) == 1
+    assert len(await service.async_get_memory_revisions("tenant_a:app", "alice")) >= 2
+    await service.purge_user_lineage("tenant_a:app", "alice")
+    assert len(await service.async_get_working_memory_blocks("tenant_a:app", "alice")) == 0
+    assert len(await service.async_get_memory_revisions("tenant_a:app", "alice")) == 0
+
+    # 7. CLI refuses insecure 0.0.0.0 bind without auth
+    rc = cli_main(["serve-api", "--host", "0.0.0.0", "--port", "8095"])
+    assert rc == 2
+
+
+
 
 
 

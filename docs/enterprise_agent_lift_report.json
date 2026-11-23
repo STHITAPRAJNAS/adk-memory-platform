@@ -13,9 +13,9 @@
     ]
   },
   "latencies_ms": {
-    "total_multi_agent_ingest_20_turns_ms": 3234.45,
-    "avg_turn_ingest_ms": 161.72,
-    "hybrid_3tier_recall_with_2hop_neo4j_and_redis_playbook_ms": 255.94
+    "total_multi_agent_ingest_20_turns_ms": 1042.07,
+    "avg_turn_ingest_ms": 52.1,
+    "hybrid_3tier_recall_with_2hop_neo4j_and_redis_playbook_ms": 54.81
   },
   "ab_comparison_metrics": {
     "1_active_state_precision_pct": {
@@ -58,7 +58,7 @@
       "steward_certified": true,
       "emergent_class_promoted_with_min_support_2": true,
       "compacted_sleep_time_episodes": 12,
-      "synthesized_entity_dossiers": 43,
+      "synthesized_entity_dossiers": 47,
       "pci_pan_redacted": true
     },
     "9_layer0_cognitive_memory_contracts": {

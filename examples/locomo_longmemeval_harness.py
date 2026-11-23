@@ -1,7 +1,12 @@
 """
-LoCoMo / LongMemEval-Style Standardized Memory Evaluation Harness (`v0.2.0`).
+Synthetic 6-Category Memory Evaluation Harness (LoCoMo / LongMemEval-Inspired Categories).
 
-Evaluates `agentic-composite-memory` across 6 standard agent-memory benchmark dimensions:
+Note: This is a lightweight 6-scenario synthetic check covering LoCoMo/LongMemEval-style
+reasoning categories (single-hop, multi-hop, temporal updates, contradiction reconciliation,
+unanswerable abstention, and TTL retention). It does NOT load the official external LoCoMo or
+LongMemEval benchmark datasets.
+
+Evaluates `agentic-composite-memory` across 6 synthetic evaluation categories:
   1. Single-Hop Factual Recall
   2. Multi-Hop Relational Reasoning (2-hop graph traversal)
   3. Temporal State Update & Point-in-Time Audit (`as_of_iso`)
@@ -312,7 +317,7 @@ async def run_locomo_longmemeval_harness(mode: str = "deterministic") -> dict[st
     }
     passed = sum(1 for v in scores.values() if v)
     return {
-        "harness": "LoCoMo / LongMemEval-Style Composite Memory Evaluation",
+        "harness": "Synthetic 6-Category Memory Evaluation (LoCoMo/LongMemEval-Inspired, Not Official Dataset)",
         "mode": mode,
         "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2),
         "overall_score_pct": round(100.0 * passed / len(scores), 1),

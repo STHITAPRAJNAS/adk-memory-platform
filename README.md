@@ -94,7 +94,7 @@ from agentic_memory_sdk import CompositeMemoryService, RemoteCompositeMemoryServ
    - **Configurable Retention TTL & Few-Shot Custom Topics (`MemoryRetentionPolicy`, `FewShotExtractionExample`)**: Per-app TTL expiration sweeps in `run_memory_maintenance()`, exponential recency decay, and Vertex AI Memory Bank-style custom extraction topics + few-shot prompt examples.
    - **Letta-Style Self-Editable Core Working Memory Blocks (`WorkingMemoryBlock`)**: Agents or operators can `replace` or `append` pinned working blocks (`POST /v1/memory/blocks`, MCP `edit_working_memory_block`) automatically injected as `[WORKING_MEMORY_BLOCKS]`.
    - **API AuthN/AuthZ (JWT HS256 / API-Key / Pluggable OIDC + RBAC + Tenant Isolation) & Observability (`security.py`)**: Enforce `READER` / `AGENT` / `ONTOLOGY_STEWARD` / `COMPLIANCE_ADMIN` / `PLATFORM_ADMIN` roles and prevent cross-tenant spoofing, with OpenTelemetry auto-detection plus `GET /v1/metrics` and `GET /metrics` (Prometheus).
-   - **LoCoMo / LongMemEval Evaluation Harness (`examples/locomo_longmemeval_harness.py`)**: 6-category standardized benchmark supporting `--mode deterministic`, `--mode gemini`, `--mode openai`, and `--mode ollama`.
+   - **Synthetic 6-Category Memory Evaluation Harness (`examples/locomo_longmemeval_harness.py`)**: Lightweight 6-scenario synthetic check covering LoCoMo/LongMemEval-inspired reasoning categories (single-hop, multi-hop, temporal updates, contradiction reconciliation, unanswerable abstention, TTL retention; not the official external datasets), supporting `--mode deterministic`, `--mode gemini`, `--mode openai`, and `--mode ollama`.
 
 ---
 
@@ -180,7 +180,11 @@ tools = get_langgraph_memory_tools(
 ### Pattern 4: Model Context Protocol (MCP `2026-07-28` & `2025-11-25` Server)
 ```bash
 # Start unified FastAPI REST (/v1/*) + MCP (/mcp/http/, /mcp/sse, /v1/mcp/*) server on port 8095
-adk-memory serve-api --host 0.0.0.0 --port 8095 --mode in_memory
+# Local dev (loopback only)
+adk-memory serve-api --host 127.0.0.1 --port 8095 --backend memory
+
+# Production / public bind (requires auth via --jwt-secret / --admin-api-key or MEMORY_AUTH_ENABLED=true)
+adk-memory serve-api --host 0.0.0.0 --port 8095 --backend docker --jwt-secret "$MEMORY_JWT_SECRET" --enable-maintenance-worker
 
 # Or run standalone stdio MCP server for Claude Desktop / Cursor / Windsurf
 adk-memory serve-mcp --mode in_memory
@@ -231,7 +235,7 @@ You can test the full multi-backend platform locally using the included [`docker
 # 1. Start PostgreSQL 16 (pgvector + RLS), Neo4j 5, and Redis 7
 docker compose up -d --wait
 
-# 2. Run the standalone unit & platform test suite (13 tests)
+# 2. Run the standalone unit & security regression test suite (20 tests)
 uv run --extra dev pytest tests/test_composite_memory_platform.py -v
 
 # 3. Run the live Docker + Multi-Agent Google ADK A2A E2E suite

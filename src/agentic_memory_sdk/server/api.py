@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 import json
 from typing import Any
 
@@ -210,9 +211,14 @@ def create_memory_platform_app(
             if enable_outbox_worker:
                 await service.stop_outbox_worker()
 
+    try:
+        _api_version = _pkg_version("agentic-composite-memory")
+    except PackageNotFoundError:
+        _api_version = "0.2.2"
+
     app = FastAPI(
         title="ADK Enterprise Composite Memory Platform API",
-        version="0.2.1",
+        version=_api_version,
         description=(
             "Domain-Agnostic Multi-Tenant Memory Service combining Episodic Memory, "
             "Stratified Ontology (TBox), Bi-Temporal Graph KB (ABox), and Reasoning Traces."
@@ -600,7 +606,39 @@ def create_memory_platform_app(
                 service.observability.inc("auth_denied")
                 return JSONResponse(status_code=401, content={"detail": str(exc)})
 
+            # Parse JSON body once for mutating requests to enforce RBAC & tenant/scope isolation
+            # across query params, path params, top-level body, and MCP tool arguments.
+            parsed_body: dict[str, Any] | None = None
+            if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+                body_bytes = await request.body()
+                if body_bytes:
+                    try:
+                        raw_parsed = json.loads(body_bytes.decode("utf-8"))
+                        if isinstance(raw_parsed, dict):
+                            parsed_body = raw_parsed
+                    except Exception:
+                        parsed_body = None
+
+            # 1. Determine required RBAC role (route-level AND MCP tool-level)
             required_role = auth_policy.required_role_for_route(request.method, path)
+            mcp_tool_name: str | None = None
+            mcp_args: dict[str, Any] | None = None
+            if path.rstrip("/") == "/v1/mcp/call" and isinstance(parsed_body, dict):
+                mcp_tool_name = str(parsed_body.get("tool_name", "") or "")
+                if isinstance(parsed_body.get("arguments"), dict):
+                    mcp_args = parsed_body["arguments"]
+                if mcp_tool_name:
+                    required_role = auth_policy.required_role_for_mcp_tool(mcp_tool_name)
+            elif path.startswith("/mcp/http") and isinstance(parsed_body, dict):
+                rpc_method = str(parsed_body.get("method", "") or "")
+                rpc_params = parsed_body.get("params") if isinstance(parsed_body.get("params"), dict) else {}
+                if rpc_method == "tools/call":
+                    mcp_tool_name = str(rpc_params.get("name", "") or "")
+                    if isinstance(rpc_params.get("arguments"), dict):
+                        mcp_args = rpc_params["arguments"]
+                    if mcp_tool_name:
+                        required_role = auth_policy.required_role_for_mcp_tool(mcp_tool_name)
+
             if not principal.has_role(required_role):
                 service.observability.inc("rbac_denied")
                 return JSONResponse(
@@ -611,28 +649,75 @@ def create_memory_platform_app(
                     },
                 )
 
-            # Enforce tenant & scope isolation on query params or JSON body
-            target_tenant = request.query_params.get("tenant_id")
-            target_app = request.query_params.get("app_name")
-            target_user = request.query_params.get("user_id")
-            if request.method in ("POST", "PUT", "PATCH"):
-                body_bytes = await request.body()
-                if body_bytes:
-                    try:
-                        parsed = json.loads(body_bytes.decode("utf-8"))
-                        if isinstance(parsed, dict):
-                            target_tenant = target_tenant or parsed.get("tenant_id")
-                            target_app = target_app or parsed.get("app_name")
-                            target_user = target_user or parsed.get("user_id")
-                    except Exception:
-                        pass
-            try:
-                auth_policy.authorize_tenant_and_scope(
-                    principal,
-                    target_tenant_id=target_tenant,
-                    target_app_name=target_app,
-                    target_user_id=target_user,
+            # 2. Collect ALL scope candidates (query, path, body, MCP arguments) and check EVERY one
+            q_tenant = request.query_params.get("tenant_id")
+            q_app = request.query_params.get("app_name")
+            q_user = request.query_params.get("user_id")
+
+            b_tenant = parsed_body.get("tenant_id") if isinstance(parsed_body, dict) else None
+            b_app = parsed_body.get("app_name") if isinstance(parsed_body, dict) else None
+            b_user = parsed_body.get("user_id") if isinstance(parsed_body, dict) else None
+
+            # Reject query-vs-body parameter smuggling (e.g. ?app_name=tenantA:app with body tenantB:app)
+            for label, qv, bv in (
+                ("tenant_id", q_tenant, b_tenant),
+                ("app_name", q_app, b_app),
+                ("user_id", q_user, b_user),
+            ):
+                if qv and bv and str(qv) != str(bv):
+                    service.observability.inc("tenant_isolation_denied")
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "detail": f"Tenant isolation violation: conflicting '{label}' between query string and body"
+                        },
+                    )
+
+            scope_checks: list[tuple[str | None, str | None, str | None]] = [
+                (q_tenant, q_app, q_user),
+                (
+                    str(b_tenant) if b_tenant is not None else None,
+                    str(b_app) if b_app is not None else None,
+                    str(b_user) if b_user is not None else None,
+                ),
+            ]
+
+            # Path-parameter scopes: `/v1/apps/{tenant_id}/{app_name}` and `/v1/domains/evolve/{app_name}`
+            path_parts = [seg for seg in path.strip("/").split("/") if seg]
+            if (
+                len(path_parts) == 4
+                and path_parts[0] == "v1"
+                and path_parts[1] == "apps"
+                and path_parts[2] not in ("register", "onboard")
+            ):
+                scope_checks.append((path_parts[2], path_parts[3], None))
+            elif (
+                len(path_parts) == 4
+                and path_parts[0] == "v1"
+                and path_parts[1] == "domains"
+                and path_parts[2] == "evolve"
+            ):
+                scope_checks.append((None, path_parts[3], None))
+
+            # MCP tool arguments scope (`/v1/mcp/call` and `/mcp/http` tools/call)
+            if isinstance(mcp_args, dict):
+                scope_checks.append(
+                    (
+                        str(mcp_args["tenant_id"]) if mcp_args.get("tenant_id") is not None else None,
+                        str(mcp_args["app_name"]) if mcp_args.get("app_name") is not None else None,
+                        str(mcp_args["user_id"]) if mcp_args.get("user_id") is not None else None,
+                    )
                 )
+
+            try:
+                for t_val, a_val, u_val in scope_checks:
+                    if t_val or a_val or u_val:
+                        auth_policy.authorize_tenant_and_scope(
+                            principal,
+                            target_tenant_id=t_val,
+                            target_app_name=a_val,
+                            target_user_id=u_val,
+                        )
             except PermissionError as exc:
                 service.observability.inc("tenant_isolation_denied")
                 return JSONResponse(status_code=403, content={"detail": str(exc)})
@@ -703,19 +788,21 @@ def create_memory_platform_app(
         limit: int = 100,
     ) -> dict[str, Any]:
         """Lists immutable memory revision history (ADD/UPDATE/RESOLVE/EXPIRE/DELETE/MANUAL_EDIT)."""
-        revs = service.get_memory_revisions(app_name=app_name, user_id=user_id, limit=limit)
+        revs = await service.async_get_memory_revisions(
+            app_name=app_name, user_id=user_id, limit=limit
+        )
         return {"count": len(revs), "revisions": [r.model_dump() for r in revs]}
 
     @app.get("/v1/memory/blocks")
     async def list_working_blocks(app_name: str, user_id: str) -> dict[str, Any]:
         """Lists Letta-style self-editable Core Working Memory Blocks for a user/app."""
-        blocks = service.get_working_memory_blocks(app_name, user_id)
+        blocks = await service.async_get_working_memory_blocks(app_name, user_id)
         return {"count": len(blocks), "blocks": [b.model_dump() for b in blocks]}
 
     @app.post("/v1/memory/blocks")
     async def upsert_working_block(req: UpsertWorkingBlockRequest) -> dict[str, Any]:
         """Creates, replaces, or appends to a Letta-style Core Working Memory Block."""
-        blk = service.upsert_working_memory_block(
+        blk = await service.async_upsert_working_memory_block(
             app_name=req.app_name,
             user_id=req.user_id,
             label=req.label,

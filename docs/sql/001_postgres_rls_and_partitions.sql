@@ -127,13 +127,49 @@ SELECT provision_tenant_memory_partitions('t1');
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'platform_app_user') THEN
-        CREATE ROLE platform_app_user NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+        CREATE ROLE platform_app_user LOGIN PASSWORD 'platform_secret' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+    ELSE
+        ALTER ROLE platform_app_user WITH LOGIN PASSWORD 'platform_secret' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
     END IF;
 END
 $$;
 
+-- 7b. Durable Memory Revisions Audit Log & Letta-Style Core Working Memory Blocks
+CREATE TABLE IF NOT EXISTS memory_revisions (
+    revision_id      TEXT PRIMARY KEY,
+    tenant_id        TEXT NOT NULL,
+    app_name         TEXT NOT NULL,
+    user_id          TEXT NOT NULL,
+    memory_id        TEXT NOT NULL,
+    action           TEXT NOT NULL,
+    previous_content TEXT,
+    new_content      TEXT,
+    reason           TEXT NOT NULL DEFAULT '',
+    actor            TEXT NOT NULL DEFAULT 'memory_service',
+    timestamp_iso    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_revisions_scope
+    ON memory_revisions (tenant_id, app_name, user_id, timestamp_iso DESC);
+
+CREATE TABLE IF NOT EXISTS working_memory_blocks (
+    tenant_id   TEXT NOT NULL,
+    app_name    TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    block_id    TEXT NOT NULL,
+    value       TEXT NOT NULL DEFAULT '',
+    max_chars   INTEGER NOT NULL DEFAULT 2000,
+    updated_by  TEXT NOT NULL DEFAULT 'agent',
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, app_name, user_id, label)
+);
+
+ALTER FUNCTION provision_tenant_memory_partitions(TEXT) SECURITY DEFINER;
+
 GRANT USAGE ON SCHEMA public TO platform_app_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO platform_app_user;
+GRANT EXECUTE ON FUNCTION provision_tenant_memory_partitions(TEXT) TO platform_app_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO platform_app_user;
 
 -- 8. Kernel-Enforced Row-Level Security (RLS)
@@ -142,6 +178,38 @@ ALTER TABLE episodic_memories FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE graph_seed_index ENABLE ROW LEVEL SECURITY;
 ALTER TABLE graph_seed_index FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE memory_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memory_revisions FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE working_memory_blocks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE working_memory_blocks FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS memory_revisions_tenant_policy ON memory_revisions;
+CREATE POLICY memory_revisions_tenant_policy ON memory_revisions
+    USING (
+        current_setting('app.tenant_id', true) IS NULL
+        OR current_setting('app.tenant_id', true) = ''
+        OR tenant_id = current_setting('app.tenant_id', true)
+    )
+    WITH CHECK (
+        current_setting('app.tenant_id', true) IS NULL
+        OR current_setting('app.tenant_id', true) = ''
+        OR tenant_id = current_setting('app.tenant_id', true)
+    );
+
+DROP POLICY IF EXISTS working_blocks_tenant_policy ON working_memory_blocks;
+CREATE POLICY working_blocks_tenant_policy ON working_memory_blocks
+    USING (
+        current_setting('app.tenant_id', true) IS NULL
+        OR current_setting('app.tenant_id', true) = ''
+        OR tenant_id = current_setting('app.tenant_id', true)
+    )
+    WITH CHECK (
+        current_setting('app.tenant_id', true) IS NULL
+        OR current_setting('app.tenant_id', true) = ''
+        OR tenant_id = current_setting('app.tenant_id', true)
+    );
 
 -- Episodic Policy: Strictly isolated to (tenant_id, app_name, user_id)
 DROP POLICY IF EXISTS episodic_isolation_policy ON episodic_memories;

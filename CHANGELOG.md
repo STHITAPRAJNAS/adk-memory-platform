@@ -5,6 +5,22 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-11-23
+
+### Security (Critical & High Fixes)
+- **Wired Auth into Packaged Server & Guarded Public Bind**: `server/main.py` now loads `AuthPolicyConfig.from_env()` (`MEMORY_AUTH_ENABLED`, `MEMORY_JWT_SECRET`, `MEMORY_ADMIN_API_KEY`, `MEMORY_AGENT_API_KEY`, `MEMORY_API_KEYS_JSON`), and `adk-memory serve-api` adds `--auth-enabled`, `--jwt-secret`, `--admin-api-key`, and refuses to bind to `0.0.0.0` without authentication unless `--allow-insecure-public-bind` is explicitly passed.
+- **Closed Query-vs-Body Tenant Smuggling & Path/MCP Scope Bypasses**: `auth_and_rbac_middleware` now checks query params, path params (`/v1/apps/{tenant_id}/{app_name}`, `/v1/domains/evolve/{app_name}`), request body fields, and nested MCP tool `arguments` (`/v1/mcp/call` and `/mcp/http/` `tools/call`) independently, rejecting any conflicting query-vs-body parameters (`403`) and enforcing per-tool RBAC via `AuthPolicyConfig.required_role_for_mcp_tool()`.
+- **Fixed Route-to-RBAC Mapping**: Aligned `required_role_for_route()` with actual FastAPI routes (`/v1/lineage/purge`, `/v1/traces`, `/v1/playbooks/register`, `/v1/apps/onboard`, `/v1/outbox/flush`) with a safe default requiring at least `AGENT` for all mutating endpoints.
+- **Strict JWT Validation**: `verify_hs256_jwt` now requires the `exp` claim, and `AuthPolicyConfig.authenticate` requires a non-empty `tenant_id` claim instead of defaulting to `default_tenant`.
+- **Complete GDPR Right-to-be-Forgotten Purge**: `purge_user_lineage()` now also erases the user's `working_memory_blocks` and `memory_revisions` (both in-memory and PostgreSQL).
+- **Enforced PostgreSQL Row-Level Security by Default**: `server/main.py` now defaults to the non-superuser `platform_app_user` role (`NOBYPASSRLS`) instead of `platform_admin`, and `docs/sql/001_postgres_rls_and_partitions.sql` provisions `platform_app_user` login credentials plus RLS-protected durable `memory_revisions` and `working_memory_blocks` tables.
+- **CI-Gated Releases**: `.github/workflows/release.yml` now runs a mandatory `verify` gate (`ruff check` + `pytest`) before `build` and `publish-pypi`.
+
+### Fixed & Cleanup
+- Relabeled `examples/locomo_longmemeval_harness.py` honestly as a lightweight 6-category synthetic evaluation harness (LoCoMo/LongMemEval-inspired categories, not the official external datasets).
+- Added `langgraph`, `langchain-core`, and `sentence-transformers` to `[project.optional-dependencies].all` in `pyproject.toml`; FastAPI app version is now resolved dynamically from package metadata.
+- Updated `README.md` test counts (`20` tests) and authenticated `serve-api` examples.
+
 ## [0.2.1] - 2026-11-23
 
 ### Added

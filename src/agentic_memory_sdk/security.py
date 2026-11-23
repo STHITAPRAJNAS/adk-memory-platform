@@ -117,7 +117,9 @@ def verify_hs256_jwt(
         raise ValueError("Invalid JWT signature")
     payload = json.loads(_b64url_decode(p_b64).decode("utf-8"))
     now = int(time.time())
-    if "exp" in payload and int(payload["exp"]) < now:
+    if "exp" not in payload or payload["exp"] is None:
+        raise ValueError("JWT missing required 'exp' claim")
+    if int(payload["exp"]) <= now:
         raise ValueError("JWT has expired")
     if expected_issuer and payload.get("iss") != expected_issuer:
         raise ValueError("JWT issuer mismatch")
@@ -183,13 +185,16 @@ class AuthPolicyConfig:
                 )
             except Exception as exc:
                 raise PermissionError(f"Invalid Bearer JWT: {exc}") from exc
+            raw_tenant = claims.get("tenant_id")
+            if not raw_tenant or not isinstance(raw_tenant, str) or not raw_tenant.strip():
+                raise PermissionError("JWT missing required non-empty 'tenant_id' claim")
             raw_roles = claims.get("roles", [MemoryRole.AGENT.value])
             if isinstance(raw_roles, str):
                 raw_roles = [raw_roles]
             parsed_roles = [MemoryRole(r) for r in raw_roles if r in {m.value for m in MemoryRole}]
             return AuthPrincipal(
                 subject=str(claims.get("sub", "jwt_user")),
-                tenant_id=str(claims.get("tenant_id", "default_tenant")),
+                tenant_id=raw_tenant.strip(),
                 roles=parsed_roles or [MemoryRole.AGENT],
                 allowed_apps=claims.get("allowed_apps"),
                 allowed_users=claims.get("allowed_users"),
@@ -197,37 +202,129 @@ class AuthPolicyConfig:
 
         raise PermissionError("Invalid API key or unrecognized Bearer token")
 
+    @classmethod
+    def from_env(cls) -> "AuthPolicyConfig":
+        """
+        Loads `AuthPolicyConfig` from environment variables for `adk-memory serve-api`:
+          - `MEMORY_AUTH_ENABLED` (`true`/`false`; auto-enabled if JWT secret or API keys are set)
+          - `MEMORY_JWT_SECRET`, `MEMORY_JWT_ISSUER`, `MEMORY_JWT_AUDIENCE`
+          - `MEMORY_ADMIN_API_KEY` (grants PLATFORM_ADMIN across tenant `*` or `MEMORY_ADMIN_TENANT_ID`)
+          - `MEMORY_AGENT_API_KEY` (grants AGENT on `MEMORY_AGENT_TENANT_ID`, default `t1`)
+          - `MEMORY_API_KEYS_JSON` (JSON map of `{key: {subject, tenant_id, roles, allowed_apps?, allowed_users?}}`)
+        """
+        import os
+
+        jwt_secret = os.getenv("MEMORY_JWT_SECRET") or None
+        jwt_issuer = os.getenv("MEMORY_JWT_ISSUER") or None
+        jwt_audience = os.getenv("MEMORY_JWT_AUDIENCE") or None
+        api_keys: dict[str, AuthPrincipal] = {}
+
+        admin_key = os.getenv("MEMORY_ADMIN_API_KEY")
+        if admin_key:
+            api_keys[admin_key] = AuthPrincipal(
+                subject="env_platform_admin",
+                tenant_id=os.getenv("MEMORY_ADMIN_TENANT_ID", "*"),
+                roles=[MemoryRole.PLATFORM_ADMIN],
+            )
+        agent_key = os.getenv("MEMORY_AGENT_API_KEY")
+        if agent_key:
+            api_keys[agent_key] = AuthPrincipal(
+                subject="env_agent",
+                tenant_id=os.getenv("MEMORY_AGENT_TENANT_ID", "t1"),
+                roles=[MemoryRole.AGENT],
+            )
+        raw_keys_json = os.getenv("MEMORY_API_KEYS_JSON")
+        if raw_keys_json:
+            parsed = json.loads(raw_keys_json)
+            if isinstance(parsed, dict):
+                for k, v in parsed.items():
+                    api_keys[str(k)] = AuthPrincipal.model_validate(v)
+
+        raw_enabled = os.getenv("MEMORY_AUTH_ENABLED")
+        if raw_enabled is not None:
+            enabled = raw_enabled.strip().lower() in ("1", "true", "yes")
+        else:
+            enabled = bool(jwt_secret or api_keys)
+
+        return cls(
+            enabled=enabled,
+            api_keys=api_keys,
+            jwt_secret=jwt_secret,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+        )
+
+    @staticmethod
+    def required_role_for_mcp_tool(tool_name: str) -> MemoryRole:
+        """Maps every MCP tool name to its minimum required RBAC role."""
+        name = tool_name.strip().lower()
+        if name in ("purge_user_lineage", "run_memory_maintenance"):
+            return MemoryRole.COMPLIANCE_ADMIN
+        if name in (
+            "register_domain_pack",
+            "induce_domain_pack",
+            "certify_domain_pack",
+            "register_app_manifest",
+            "evolve_app_ontology",
+        ):
+            return MemoryRole.ONTOLOGY_STEWARD
+        if name in (
+            "commit_episode",
+            "ingest_memory",
+            "record_decision_trace",
+            "register_playbook",
+            "edit_working_memory_block",
+        ):
+            return MemoryRole.AGENT
+        if name in (
+            "recall_context",
+            "check_answerable",
+            "inspect_platform_governance",
+            "list_user_memories",
+            "get_memory_revisions",
+        ):
+            return MemoryRole.READER
+        # Default-deny safe fallback for any unknown tool
+        return MemoryRole.PLATFORM_ADMIN
+
     @staticmethod
     def required_role_for_route(method: str, path: str) -> MemoryRole:
-        """Maps HTTP routes to minimum required RBAC role."""
-        p = path.lower()
-        if "/memory/purge" in p or "/maintenance/run" in p:
+        """Maps actual FastAPI HTTP routes to minimum required RBAC role."""
+        m = method.upper()
+        p = path.lower().rstrip("/")
+        # Compliance & destructive lifecycle routes
+        if p.endswith("/v1/lineage/purge") or p.endswith("/v1/memory/purge") or p.endswith("/v1/maintenance/run"):
             return MemoryRole.COMPLIANCE_ADMIN
-        if "/memory/revisions" in p:
+        if "/v1/memory/items" in p and m in ("PUT", "PATCH", "DELETE"):
+            return MemoryRole.COMPLIANCE_ADMIN
+        # Ontology & App Control Plane routes
+        if any(
+            seg in p
+            for seg in (
+                "/v1/domains/",
+                "/v1/ontology/evolve",
+                "/v1/apps/register",
+                "/v1/apps/onboard",
+            )
+        ):
+            return MemoryRole.READER if m == "GET" else MemoryRole.ONTOLOGY_STEWARD
+        # Explicitly read-only POST query routes
+        if p.endswith("/v1/memory/search") or p.endswith("/v1/memory/check-answerable"):
             return MemoryRole.READER
-        if "/memory/items" in p and method.upper() in ("PUT", "PATCH", "DELETE"):
-            return MemoryRole.COMPLIANCE_ADMIN
+        # Agent Data-Plane write routes
         if any(
             seg in p
             for seg in (
-                "/domains/packs",
-                "/domains/register",
-                "/ontology/evolve",
-                "/apps/register",
+                "/v1/memory/events",
+                "/v1/memory/blocks",
+                "/v1/traces",
+                "/v1/playbooks",
+                "/v1/outbox/flush",
             )
         ):
-            return MemoryRole.READER if method.upper() == "GET" else MemoryRole.ONTOLOGY_STEWARD
-        if any(
-            seg in p
-            for seg in (
-                "/memory/events",
-                "/memory/playbooks",
-                "/memory/traces",
-                "/memory/blocks",
-            )
-        ):
-            return MemoryRole.READER if method.upper() == "GET" else MemoryRole.AGENT
-        return MemoryRole.READER
+            return MemoryRole.READER if m == "GET" else MemoryRole.AGENT
+        # Safe default: GET is READER, any other mutating request requires AGENT
+        return MemoryRole.READER if m == "GET" else MemoryRole.AGENT
 
     def authorize_tenant_and_scope(
         self,

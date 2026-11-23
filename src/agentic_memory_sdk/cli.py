@@ -36,6 +36,26 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Interval in seconds between background maintenance cycles (default: 300)",
     )
+    p_api.add_argument(
+        "--auth-enabled",
+        action="store_true",
+        help="Enforce JWT / API-Key AuthN + RBAC + tenant isolation (sets MEMORY_AUTH_ENABLED=true)",
+    )
+    p_api.add_argument(
+        "--jwt-secret",
+        default=None,
+        help="HS256 JWT signing secret (sets MEMORY_JWT_SECRET and enables auth)",
+    )
+    p_api.add_argument(
+        "--admin-api-key",
+        default=None,
+        help="Bootstrap PLATFORM_ADMIN API key (sets MEMORY_ADMIN_API_KEY and enables auth)",
+    )
+    p_api.add_argument(
+        "--allow-insecure-public-bind",
+        action="store_true",
+        help="Allow binding to 0.0.0.0 without authentication (NOT recommended for production)",
+    )
 
     # 2. serve-mcp: Run Model Context Protocol (MCP) Server
     p_mcp = sub.add_parser(
@@ -96,6 +116,27 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["ENABLE_MAINTENANCE_WORKER"] = "true"
         if args.maintenance_interval_sec is not None:
             os.environ["MAINTENANCE_INTERVAL_SEC"] = str(args.maintenance_interval_sec)
+        if args.jwt_secret:
+            os.environ["MEMORY_JWT_SECRET"] = args.jwt_secret
+        if args.admin_api_key:
+            os.environ["MEMORY_ADMIN_API_KEY"] = args.admin_api_key
+        if args.auth_enabled or args.jwt_secret or args.admin_api_key:
+            os.environ["MEMORY_AUTH_ENABLED"] = "true"
+        from .security import AuthPolicyConfig
+
+        resolved_auth = AuthPolicyConfig.from_env()
+        if (
+            args.host in ("0.0.0.0", "::")
+            and not resolved_auth.enabled
+            and not args.allow_insecure_public_bind
+        ):
+            print(
+                "ERROR: Refusing to bind to public interface 0.0.0.0 without authentication enabled. "
+                "Pass --jwt-secret / --admin-api-key (or set MEMORY_AUTH_ENABLED=true), "
+                "bind to 127.0.0.1, or pass --allow-insecure-public-bind for local testing.",
+                file=sys.stderr,
+            )
+            return 2
         uvicorn.run(
             "agentic_memory_sdk.server.main:app",
             host=args.host,

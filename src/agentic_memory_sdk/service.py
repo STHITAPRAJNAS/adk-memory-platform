@@ -162,6 +162,7 @@ class CompositeMemoryService(BaseMemoryService):
         self._maintenance_stop_event: asyncio.Event | None = None
         self._maintenance_lock = asyncio.Lock()
         self._maintenance_last_stats: dict[str, Any] | None = None
+        self._pg_lifecycle_tables_ready: bool = False
 
     @classmethod
     def from_postgres_stack(
@@ -471,22 +472,21 @@ class CompositeMemoryService(BaseMemoryService):
                 metadata=ep_meta,
             )
             episodic_records.append(ep)
-            self.memory_revisions.append(
-                MemoryRevisionRecord(
-                    tenant_id=ctx.tenant_id,
-                    app_name=ctx.app_name,
-                    user_id=ctx.user_id,
-                    memory_id=ep.episode_id,
-                    action="ADD",
-                    new_content=clean_text,
-                    reason=(
-                        reconcile_decision.reason
-                        if reconcile_decision
-                        else "Ephemeral turn stored"
-                    ),
-                    actor=author,
-                )
+            add_rev = MemoryRevisionRecord(
+                tenant_id=ctx.tenant_id,
+                app_name=ctx.app_name,
+                user_id=ctx.user_id,
+                memory_id=ep.episode_id,
+                action="ADD",
+                new_content=clean_text,
+                reason=(
+                    reconcile_decision.reason
+                    if reconcile_decision
+                    else "Ephemeral turn stored"
+                ),
+                actor=author,
             )
+            await self._persist_revision(add_rev)
             self.observability.inc("episodes_ingested")
             if not is_ephemeral:
                 sanitized_transcript.append(f"{author}: {clean_text}")
@@ -639,7 +639,7 @@ class CompositeMemoryService(BaseMemoryService):
 
         entries: list[MemoryEntry] = []
         # Prepend Letta-style self-editable Working Memory Blocks if present
-        user_blocks = self.get_working_memory_blocks(
+        user_blocks = await self.async_get_working_memory_blocks(
             f"{ctx.tenant_id}:{ctx.app_name}", ctx.user_id
         )
         if user_blocks:
@@ -916,13 +916,49 @@ class CompositeMemoryService(BaseMemoryService):
             self._maintenance_task = None
 
     async def purge_user_lineage(self, app_name: str, user_id: str) -> list[str]:
-        """Cascading Right-to-be-Forgotten deletion across Episodic, Seed, and Graph stores."""
+        """
+        Complete GDPR Right-to-be-Forgotten deletion across ALL tiers:
+        Episodic, Seed, Bi-Temporal Graph, Working Memory Blocks, and Memory Revision History
+        (both in-memory and PostgreSQL).
+        """
         tenant_id, clean_app = self._split_tenant_app(app_name)
         ctx = await self.registry.resolve_context(tenant_id, clean_app, user_id)
         purged_episode_ids = await self.seed_store.purge_user_data(ctx)
         await self.graph.purge_episode_lineage(
             ctx.tenant_id, purged_episode_ids, user_id
         )
+        # Purge in-memory Working Memory Blocks & Memory Revisions for this (tenant_id, user_id)
+        block_keys_to_remove = [
+            k
+            for k in self.working_memory_blocks
+            if k[0] == ctx.tenant_id and k[2] == user_id
+        ]
+        for k in block_keys_to_remove:
+            del self.working_memory_blocks[k]
+        self.memory_revisions = [
+            rev
+            for rev in self.memory_revisions
+            if not (rev.tenant_id == ctx.tenant_id and rev.user_id == user_id)
+        ]
+        # Purge PostgreSQL Working Memory Blocks & Memory Revisions if backed by Postgres
+        if hasattr(self.seed_store, "_get_pool"):
+            await self._ensure_pg_lifecycle_tables()
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.tenant_id', $1, true)", ctx.tenant_id
+                    )
+                    await conn.execute(
+                        "DELETE FROM working_memory_blocks WHERE tenant_id = $1 AND user_id = $2",
+                        ctx.tenant_id,
+                        user_id,
+                    )
+                    await conn.execute(
+                        "DELETE FROM memory_revisions WHERE tenant_id = $1 AND user_id = $2",
+                        ctx.tenant_id,
+                        user_id,
+                    )
         return purged_episode_ids
 
     async def run_memory_maintenance(
@@ -1321,7 +1357,7 @@ class CompositeMemoryService(BaseMemoryService):
                 )
                 expired_memories += len(exp_rows)
                 for er in exp_rows:
-                    self.memory_revisions.append(
+                    await self._persist_revision(
                         MemoryRevisionRecord(
                             tenant_id=er["tenant_id"],
                             app_name=er["app_name"],
@@ -2187,7 +2223,7 @@ class CompositeMemoryService(BaseMemoryService):
                 if row:
                     prev_text = row["content_text"]
 
-        self.memory_revisions.append(
+        await self._persist_revision(
             MemoryRevisionRecord(
                 tenant_id=ctx.tenant_id,
                 app_name=ctx.app_name,
@@ -2310,7 +2346,7 @@ class CompositeMemoryService(BaseMemoryService):
             reason=reason,
             actor=actor,
         )
-        self.memory_revisions.append(rev)
+        await self._persist_revision(rev)
         self.observability.inc("manual_edits")
         return {"status": "updated", "episode_id": episode_id, "revision": rev.model_dump()}
 
@@ -2371,7 +2407,7 @@ class CompositeMemoryService(BaseMemoryService):
             reason=reason,
             actor=actor,
         )
-        self.memory_revisions.append(rev)
+        await self._persist_revision(rev)
         self.observability.inc("manual_deletes")
         return {"status": "deleted", "episode_id": episode_id, "revision": rev.model_dump()}
 
@@ -2460,4 +2496,235 @@ class CompositeMemoryService(BaseMemoryService):
             )
         )
         self.observability.inc("working_blocks_updated")
+        return blk
+
+    async def _ensure_pg_lifecycle_tables(self) -> None:
+        """Idempotently ensures durable `memory_revisions` and `working_memory_blocks` tables exist on Postgres."""
+        if self._pg_lifecycle_tables_ready or not hasattr(self.seed_store, "_get_pool"):
+            return
+        pool = await getattr(self.seed_store, "_get_pool")()
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS memory_revisions (
+                        revision_id      TEXT PRIMARY KEY,
+                        tenant_id        TEXT NOT NULL,
+                        app_name         TEXT NOT NULL,
+                        user_id          TEXT NOT NULL,
+                        memory_id        TEXT NOT NULL,
+                        action           TEXT NOT NULL,
+                        previous_content TEXT,
+                        new_content      TEXT,
+                        reason           TEXT NOT NULL DEFAULT '',
+                        actor            TEXT NOT NULL DEFAULT 'memory_service',
+                        timestamp_iso    TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS working_memory_blocks (
+                        tenant_id   TEXT NOT NULL,
+                        app_name    TEXT NOT NULL,
+                        user_id     TEXT NOT NULL,
+                        label       TEXT NOT NULL,
+                        block_id    TEXT NOT NULL,
+                        value       TEXT NOT NULL DEFAULT '',
+                        max_chars   INTEGER NOT NULL DEFAULT 2000,
+                        updated_by  TEXT NOT NULL DEFAULT 'agent',
+                        updated_at  TEXT NOT NULL,
+                        PRIMARY KEY (tenant_id, app_name, user_id, label)
+                    );
+                    """
+                )
+        except Exception:
+            # Non-superuser role (`platform_app_user`) relies on pre-provisioned tables from `init-db`
+            pass
+        self._pg_lifecycle_tables_ready = True
+
+    async def _persist_revision(self, rev: MemoryRevisionRecord) -> None:
+        """Appends a MemoryRevisionRecord in memory AND persists it to PostgreSQL when available."""
+        self.memory_revisions.append(rev)
+        if hasattr(self.seed_store, "_get_pool"):
+            await self._ensure_pg_lifecycle_tables()
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.tenant_id', $1, true)", rev.tenant_id
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO memory_revisions
+                            (revision_id, tenant_id, app_name, user_id, memory_id, action,
+                             previous_content, new_content, reason, actor, timestamp_iso)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ON CONFLICT (revision_id) DO NOTHING
+                        """,
+                        rev.revision_id,
+                        rev.tenant_id,
+                        rev.app_name,
+                        rev.user_id,
+                        rev.memory_id,
+                        rev.action,
+                        rev.previous_content,
+                        rev.new_content,
+                        rev.reason,
+                        rev.actor,
+                        rev.timestamp,
+                    )
+
+    async def async_get_memory_revisions(
+        self,
+        app_name: str | None = None,
+        user_id: str | None = None,
+        limit: int = 100,
+    ) -> list[MemoryRevisionRecord]:
+        """Reads durable memory revisions from PostgreSQL when available, else in-memory."""
+        if hasattr(self.seed_store, "_get_pool"):
+            await self._ensure_pg_lifecycle_tables()
+            tenant_filter: str | None = None
+            app_filter: str | None = None
+            if app_name:
+                tenant_filter, app_filter = self._split_tenant_app(app_name)
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    if tenant_filter:
+                        await conn.execute(
+                            "SELECT set_config('app.tenant_id', $1, true)", tenant_filter
+                        )
+                    clauses: list[str] = []
+                    params: list[Any] = []
+                    if tenant_filter:
+                        params.append(tenant_filter)
+                        clauses.append(f"tenant_id = ${len(params)}")
+                    if app_filter:
+                        params.append(app_filter)
+                        clauses.append(f"app_name = ${len(params)}")
+                    if user_id:
+                        params.append(user_id)
+                        clauses.append(f"user_id = ${len(params)}")
+                    where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+                    params.append(limit)
+                    rows = await conn.fetch(
+                        f"""
+                        SELECT revision_id, tenant_id, app_name, user_id, memory_id, action,
+                               previous_content, new_content, reason, actor, timestamp_iso
+                        FROM memory_revisions
+                        {where_sql}
+                        ORDER BY timestamp_iso DESC
+                        LIMIT ${len(params)}
+                        """,
+                        *params,
+                    )
+            return [
+                MemoryRevisionRecord(
+                    revision_id=r["revision_id"],
+                    tenant_id=r["tenant_id"],
+                    app_name=r["app_name"],
+                    user_id=r["user_id"],
+                    memory_id=r["memory_id"],
+                    action=r["action"],
+                    previous_content=r["previous_content"],
+                    new_content=r["new_content"],
+                    reason=r["reason"],
+                    actor=r["actor"],
+                    timestamp=r["timestamp_iso"],
+                )
+                for r in rows
+            ]
+        return self.get_memory_revisions(app_name=app_name, user_id=user_id, limit=limit)
+
+    async def async_get_working_memory_blocks(
+        self, app_name: str, user_id: str
+    ) -> list[WorkingMemoryBlock]:
+        """Reads durable Working Memory Blocks from PostgreSQL when available, else in-memory."""
+        if hasattr(self.seed_store, "_get_pool"):
+            await self._ensure_pg_lifecycle_tables()
+            tenant_id, clean_app = self._split_tenant_app(app_name)
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.tenant_id', $1, true)", tenant_id
+                    )
+                    rows = await conn.fetch(
+                        """
+                        SELECT block_id, tenant_id, app_name, user_id, label, value,
+                               max_chars, updated_by, updated_at
+                        FROM working_memory_blocks
+                        WHERE tenant_id = $1 AND app_name = $2 AND user_id = $3
+                        ORDER BY label ASC
+                        """,
+                        tenant_id,
+                        clean_app,
+                        user_id,
+                    )
+            return [
+                WorkingMemoryBlock(
+                    block_id=r["block_id"],
+                    tenant_id=r["tenant_id"],
+                    app_name=r["app_name"],
+                    user_id=r["user_id"],
+                    label=r["label"],
+                    value=r["value"],
+                    max_chars=r["max_chars"],
+                    updated_by=r["updated_by"],
+                    updated_at=r["updated_at"],
+                )
+                for r in rows
+            ]
+        return self.get_working_memory_blocks(app_name, user_id)
+
+    async def async_upsert_working_memory_block(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        label: str,
+        value: str,
+        mode: str = "replace",
+        max_chars: int = 2000,
+        actor: str = "agent",
+    ) -> WorkingMemoryBlock:
+        """Persists a Letta-style Core Working Memory Block in memory AND PostgreSQL when available."""
+        blk = self.upsert_working_memory_block(
+            app_name=app_name,
+            user_id=user_id,
+            label=label,
+            value=value,
+            mode=mode,
+            max_chars=max_chars,
+            actor=actor,
+        )
+        if hasattr(self.seed_store, "_get_pool"):
+            await self._ensure_pg_lifecycle_tables()
+            pool = await getattr(self.seed_store, "_get_pool")()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.tenant_id', $1, true)", blk.tenant_id
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO working_memory_blocks
+                            (tenant_id, app_name, user_id, label, block_id, value,
+                             max_chars, updated_by, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        ON CONFLICT (tenant_id, app_name, user_id, label) DO UPDATE
+                        SET value = EXCLUDED.value,
+                            max_chars = EXCLUDED.max_chars,
+                            updated_by = EXCLUDED.updated_by,
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        blk.tenant_id,
+                        blk.app_name,
+                        blk.user_id,
+                        blk.label,
+                        blk.block_id,
+                        blk.value,
+                        blk.max_chars,
+                        blk.updated_by,
+                        blk.updated_at,
+                    )
+            if self.memory_revisions:
+                await self._persist_revision(self.memory_revisions[-1])
         return blk

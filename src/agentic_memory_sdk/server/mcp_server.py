@@ -416,7 +416,7 @@ class MemoryMcpServerTools:
         max_chars: int = 2000,
     ) -> dict[str, Any]:
         """Letta/MemGPT-style self-editable Core Working Memory Block (`replace` or `append`)."""
-        blk = self.service.upsert_working_memory_block(
+        blk = await self.service.async_upsert_working_memory_block(
             app_name=app_name,
             user_id=user_id,
             label=label,
@@ -450,7 +450,7 @@ class MemoryMcpServerTools:
         limit: int = 50,
     ) -> dict[str, Any]:
         """Returns immutable memory revision audit records (ADD/UPDATE/RESOLVE/EXPIRE/DELETE/MANUAL_EDIT)."""
-        revs = self.service.get_memory_revisions(
+        revs = await self.service.async_get_memory_revisions(
             app_name=app_name, user_id=user_id, limit=limit
         )
         return {"count": len(revs), "revisions": [r.model_dump() for r in revs]}

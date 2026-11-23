@@ -1,7 +1,7 @@
 {
-  "harness": "LoCoMo / LongMemEval-Style Composite Memory Evaluation",
+  "harness": "Synthetic 6-Category Memory Evaluation (LoCoMo/LongMemEval-Inspired, Not Official Dataset)",
   "mode": "deterministic",
-  "duration_ms": 21.4,
+  "duration_ms": 12.62,
   "overall_score_pct": 100.0,
   "categories_passed": "6/6",
   "category_results": {

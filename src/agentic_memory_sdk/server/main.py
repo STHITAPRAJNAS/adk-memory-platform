@@ -34,6 +34,7 @@ from ..models import (
     ExtractionPayload,
 )
 from ..ontology_loader import DomainPackLoader
+from ..security import AuthPolicyConfig
 from ..service import CompositeMemoryService
 from .api import create_memory_platform_app
 
@@ -264,9 +265,10 @@ def build_platform_service_from_env() -> tuple[CompositeMemoryService, PlatformO
     else:
         extractor = build_default_rule_extractor()
 
+    # Use dedicated non-superuser `platform_app_user` by default so PostgreSQL RLS is enforced!
     pg_dsn = os.environ.get(
         "POSTGRES_DSN",
-        "postgresql://platform_admin:platform_secret@127.0.0.1:5433/adk_memory_platform",
+        "postgresql://platform_app_user:platform_secret@127.0.0.1:5433/adk_memory_platform",
     )
     neo4j_uri = os.environ.get("NEO4J_URI", "bolt://127.0.0.1:7687")
     neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
@@ -389,6 +391,7 @@ _enable_maint = os.getenv("ENABLE_MAINTENANCE_WORKER", "false").strip().lower() 
 _maint_interval = float(os.getenv("MAINTENANCE_INTERVAL_SEC", "300"))
 _maint_min_ep = int(os.getenv("MAINTENANCE_MIN_EPISODES_TO_COMPACT", "4"))
 _maint_min_conf = float(os.getenv("MAINTENANCE_MIN_OVERFLOW_CONFIDENCE", "0.55"))
+_auth_policy = AuthPolicyConfig.from_env()
 app = create_memory_platform_app(
     service,
     registrar,
@@ -396,4 +399,5 @@ app = create_memory_platform_app(
     maintenance_interval_sec=_maint_interval,
     maintenance_min_episodes_to_compact=_maint_min_ep,
     maintenance_min_overflow_confidence=_maint_min_conf,
+    auth_policy=_auth_policy,
 )

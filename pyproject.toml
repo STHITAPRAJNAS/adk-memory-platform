@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentic-composite-memory"
-version = "0.2.1"
+version = "0.2.2"
 description = "Enterprise Multi-Tenant Ontology-Grounded Composite Memory SDK, MCP Server & Platform Service for Google ADK Agents"
 readme = "README.md"
 license = "Apache-2.0"
@@ -104,6 +104,9 @@ all = [
     "opensearch-py[async]>=2.6.0",
     "rdflib>=7.0.0",
     "pyshacl>=0.26.0",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "sentence-transformers>=3.0.0",
 ]
 dev = [
     "pytest>=8.2.0",
