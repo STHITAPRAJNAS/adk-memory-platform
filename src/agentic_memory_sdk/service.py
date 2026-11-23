@@ -158,6 +158,10 @@ class CompositeMemoryService(BaseMemoryService):
         self.working_memory_blocks: dict[tuple[str, str, str, str], WorkingMemoryBlock] = {}
         self._outbox_task: asyncio.Task[None] | None = None
         self._outbox_stop_event: asyncio.Event | None = None
+        self._maintenance_task: asyncio.Task[None] | None = None
+        self._maintenance_stop_event: asyncio.Event | None = None
+        self._maintenance_lock = asyncio.Lock()
+        self._maintenance_last_stats: dict[str, Any] | None = None
 
     @classmethod
     def from_postgres_stack(
@@ -800,6 +804,116 @@ class CompositeMemoryService(BaseMemoryService):
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self._outbox_task.cancel()
             self._outbox_task = None
+
+    @property
+    def maintenance_worker_running(self) -> bool:
+        """Returns True if the built-in background Sleep-Time Maintenance Worker is active."""
+        return self._maintenance_task is not None and not self._maintenance_task.done()
+
+    async def _run_maintenance_cycle_with_lock(
+        self,
+        *,
+        min_episodes_to_compact: int = 4,
+        min_overflow_confidence: float = 0.55,
+        advisory_lock_id: int = 8842102026,
+    ) -> dict[str, int] | None:
+        """
+        Executes a single Sleep-Time Maintenance cycle protected by:
+          1. In-process `asyncio.Lock` (prevents overlapping ticks in the same process).
+          2. PostgreSQL non-blocking session advisory lock (`pg_try_advisory_lock`) when backed
+             by PostgreSQL so multiple stateless API replicas never race on the same batch.
+        """
+        if self._maintenance_lock.locked():
+            self.observability.inc("maintenance_lock_skipped")
+            return None
+        async with self._maintenance_lock:
+            pg_conn = None
+            pool = None
+            acquired_pg_lock = False
+            try:
+                if hasattr(self.seed_store, "_get_pool"):
+                    pool = await getattr(self.seed_store, "_get_pool")()
+                    pg_conn = await pool.acquire()
+                    acquired_pg_lock = bool(
+                        await pg_conn.fetchval(
+                            "SELECT pg_try_advisory_lock($1)", advisory_lock_id
+                        )
+                    )
+                    if not acquired_pg_lock:
+                        self.observability.inc("maintenance_lock_skipped")
+                        return None
+
+                stats = await self.run_memory_maintenance(
+                    min_episodes_to_compact=min_episodes_to_compact,
+                    min_overflow_confidence=min_overflow_confidence,
+                )
+                self._maintenance_last_stats = dict(stats)
+                self.observability.inc("maintenance_cycles_completed")
+                return stats
+            finally:
+                if pg_conn is not None:
+                    try:
+                        if acquired_pg_lock:
+                            await pg_conn.execute(
+                                "SELECT pg_advisory_unlock($1)", advisory_lock_id
+                            )
+                    finally:
+                        if pool is not None:
+                            await pool.release(pg_conn)
+
+    async def start_maintenance_worker(
+        self,
+        *,
+        interval_sec: float = 300.0,
+        min_episodes_to_compact: int = 4,
+        min_overflow_confidence: float = 0.55,
+        run_immediately: bool = False,
+        advisory_lock_id: int = 8842102026,
+    ) -> None:
+        """
+        Starts an optional, multi-replica-safe background scheduler that periodically runs
+        `run_memory_maintenance()` (Sleep-Time batch ontology extraction, TTL expiration sweep,
+        ephemeral pruning, session compaction, and entity dossier synthesis).
+
+        Ideal for single-node / embedded deployments or as an opt-in alternative to an
+        external Kubernetes CronJob / Cloud Scheduler.
+        """
+        if self._maintenance_task is not None and not self._maintenance_task.done():
+            return
+        self._maintenance_stop_event = asyncio.Event()
+
+        async def _maintenance_loop() -> None:
+            first_tick = True
+            while self._maintenance_stop_event and not self._maintenance_stop_event.is_set():
+                if not (first_tick and not run_immediately):
+                    try:
+                        await self._run_maintenance_cycle_with_lock(
+                            min_episodes_to_compact=min_episodes_to_compact,
+                            min_overflow_confidence=min_overflow_confidence,
+                            advisory_lock_id=advisory_lock_id,
+                        )
+                    except Exception as exc:
+                        logger.warning("Background maintenance worker error: %s", exc)
+                first_tick = False
+                try:
+                    await asyncio.wait_for(
+                        self._maintenance_stop_event.wait(), timeout=interval_sec
+                    )
+                except asyncio.TimeoutError:
+                    pass
+
+        self._maintenance_task = asyncio.create_task(_maintenance_loop())
+
+    async def stop_maintenance_worker(self) -> None:
+        """Cleanly stops the built-in background Sleep-Time Maintenance Worker."""
+        if self._maintenance_stop_event is not None:
+            self._maintenance_stop_event.set()
+        if self._maintenance_task is not None:
+            try:
+                await asyncio.wait_for(self._maintenance_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self._maintenance_task.cancel()
+            self._maintenance_task = None
 
     async def purge_user_lineage(self, app_name: str, user_id: str) -> list[str]:
         """Cascading Right-to-be-Forgotten deletion across Episodic, Seed, and Graph stores."""

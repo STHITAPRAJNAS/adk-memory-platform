@@ -25,6 +25,17 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override MEMORY_BACKEND ('docker' for Postgres+Neo4j, 'memory' for InMemory)",
     )
+    p_api.add_argument(
+        "--enable-maintenance-worker",
+        action="store_true",
+        help="Enable built-in periodic Sleep-Time batch extraction & TTL maintenance scheduler",
+    )
+    p_api.add_argument(
+        "--maintenance-interval-sec",
+        type=float,
+        default=None,
+        help="Interval in seconds between background maintenance cycles (default: 300)",
+    )
 
     # 2. serve-mcp: Run Model Context Protocol (MCP) Server
     p_mcp = sub.add_parser(
@@ -81,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.backend:
             os.environ["MEMORY_BACKEND"] = args.backend
+        if args.enable_maintenance_worker:
+            os.environ["ENABLE_MAINTENANCE_WORKER"] = "true"
+        if args.maintenance_interval_sec is not None:
+            os.environ["MAINTENANCE_INTERVAL_SEC"] = str(args.maintenance_interval_sec)
         uvicorn.run(
             "agentic_memory_sdk.server.main:app",
             host=args.host,

@@ -2628,6 +2628,99 @@ async def test_v020_reconciliation_ttl_working_blocks_rbac_jwt_console_ui_and_me
         assert "edit_working_memory_block" in mcp_list.json()["tools"]
 
 
+@pytest.mark.asyncio
+async def test_builtin_configurable_sleep_time_maintenance_worker_and_fastapi_lifespan():
+    """
+    Verifies the opt-in built-in Sleep-Time Maintenance Worker (`start_maintenance_worker` /
+    `stop_maintenance_worker` and FastAPI `enable_maintenance_worker=True`):
+      1. Ingests a `SLEEP_TIME` deferred episode (`extraction_pending=True`) and an expired TTL episode.
+      2. Starts the background maintenance worker via FastAPI lifespan (`maintenance_interval_sec=0.05`).
+      3. Confirms the worker automatically extracts the deferred episode into the Knowledge Graph,
+         sweeps the expired TTL episode, and reports `maintenance_worker_running=True` in `/health`.
+      4. Confirms clean shutdown on lifespan exit (`maintenance_worker_running=False`).
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    import httpx
+
+    store = InMemoryUnifiedAdapter()
+    ext = RuleBasedMockExtractorAdapter()
+    ext.add_keyword_rule(
+        "checkout-api runs on eks-prod-01",
+        ExtractionPayload(
+            entities=[
+                ExtractedEntity(canonical_name="checkout-api", entity_class="p:Object", summary="Checkout API"),
+                ExtractedEntity(canonical_name="eks-prod-01", entity_class="p:Object", summary="EKS Prod Cluster 01"),
+            ],
+            facts=[
+                ExtractedFact(
+                    source_entity="checkout-api",
+                    source_class="p:Object",
+                    predicate="RELATED_TO",
+                    target_entity="eks-prod-01",
+                    target_class="p:Object",
+                    fact_summary="checkout-api runs on eks-prod-01",
+                )
+            ],
+        ),
+    )
+    service = CompositeMemoryService(
+        registry_adapter=store,
+        seed_store_adapter=store,
+        graph_adapter=store,
+        embedding_adapter=DeterministicHashEmbeddingAdapter(),
+        extractor_adapter=ext,
+        default_extraction_mode=ExtractionMode.SLEEP_TIME,
+    )
+    registrar = PlatformOntologyRegistrar(store)
+    await registrar.register_adk_app(
+        AppMemoryManifest(
+            tenant_id="t_sched",
+            app_name="sre_bot",
+            extraction_mode=ExtractionMode.SLEEP_TIME,
+        )
+    )
+
+    # 1. Hot-path ingest in SLEEP_TIME mode (zero graph edges yet!) + expired TTL memory
+    await service.add_events_to_memory(
+        app_name="t_sched:sre_bot",
+        user_id="u1",
+        events=[_make_event("checkout-api runs on eks-prod-01")],
+    )
+    past_exp = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    await service.add_events_to_memory(
+        app_name="t_sched:sre_bot",
+        user_id="u1",
+        events=[_make_event("One-time token EXPIRED-999")],
+        custom_metadata={"expires_at": past_exp},
+    )
+    assert len(store.edges) == 0  # Deferred!
+
+    # 2. Start FastAPI app with built-in maintenance worker enabled
+    app = create_memory_platform_app(
+        service=service,
+        registrar=registrar,
+        enable_outbox_worker=False,
+        enable_maintenance_worker=True,
+        maintenance_interval_sec=0.05,
+        maintenance_run_immediately=True,
+    )
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0.15)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test.local") as client:
+            health = (await client.get("/health")).json()
+            assert health["maintenance_worker_running"] is True
+            assert health["maintenance_last_stats"] is not None
+        assert len(store.edges) >= 1  # Automatically batch-extracted by background worker!
+        assert not any("EXPIRED-999" in ep.content_text for ep in store.episodes)
+        assert service.observability.counters["maintenance_cycles_completed"] >= 1
+
+    # 3. Clean shutdown verified
+    assert service.maintenance_worker_running is False
+
+
+
 
 
 

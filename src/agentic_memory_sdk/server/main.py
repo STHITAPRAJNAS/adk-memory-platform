@@ -381,4 +381,19 @@ def build_platform_service_from_env() -> tuple[CompositeMemoryService, PlatformO
 
 
 service, registrar = build_platform_service_from_env()
-app = create_memory_platform_app(service, registrar)
+_enable_maint = os.getenv("ENABLE_MAINTENANCE_WORKER", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+_maint_interval = float(os.getenv("MAINTENANCE_INTERVAL_SEC", "300"))
+_maint_min_ep = int(os.getenv("MAINTENANCE_MIN_EPISODES_TO_COMPACT", "4"))
+_maint_min_conf = float(os.getenv("MAINTENANCE_MIN_OVERFLOW_CONFIDENCE", "0.55"))
+app = create_memory_platform_app(
+    service,
+    registrar,
+    enable_maintenance_worker=_enable_maint,
+    maintenance_interval_sec=_maint_interval,
+    maintenance_min_episodes_to_compact=_maint_min_ep,
+    maintenance_min_overflow_confidence=_maint_min_conf,
+)

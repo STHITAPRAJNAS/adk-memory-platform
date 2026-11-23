@@ -5,6 +5,14 @@ All notable changes to `agentic-composite-memory` will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-23
+
+### Added
+- **Configurable, Multi-Replica-Safe Built-In Sleep-Time Maintenance Worker**:
+  - Added `CompositeMemoryService.start_maintenance_worker(interval_sec=300.0, ...)` and `stop_maintenance_worker()` with in-process `asyncio.Lock` plus non-blocking PostgreSQL session advisory lock (`pg_try_advisory_lock`) so even multi-replica deployments never race on the same Sleep-Time extraction/compaction/TTL batch.
+  - Wired into FastAPI `create_memory_platform_app(..., enable_maintenance_worker=False, maintenance_interval_sec=300.0)` and `/health` (`maintenance_worker_running`, `maintenance_last_stats`).
+  - Added CLI flags (`adk-memory serve-api --enable-maintenance-worker --maintenance-interval-sec 300`) and environment variables (`ENABLE_MAINTENANCE_WORKER`, `MAINTENANCE_INTERVAL_SEC`, `MAINTENANCE_MIN_EPISODES_TO_COMPACT`, `MAINTENANCE_MIN_OVERFLOW_CONFIDENCE`).
+
 ## [0.2.0] - 2026-11-23
 
 ### Added

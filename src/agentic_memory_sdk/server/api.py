@@ -140,6 +140,11 @@ def create_memory_platform_app(
     registrar: PlatformOntologyRegistrar | None = None,
     enable_outbox_worker: bool = True,
     outbox_interval_sec: float = 2.0,
+    enable_maintenance_worker: bool = False,
+    maintenance_interval_sec: float = 300.0,
+    maintenance_min_episodes_to_compact: int = 4,
+    maintenance_min_overflow_confidence: float = 0.55,
+    maintenance_run_immediately: bool = False,
     mount_mcp: bool = True,
     auth_policy: AuthPolicyConfig | None = None,
 ) -> FastAPI:
@@ -181,6 +186,13 @@ def create_memory_platform_app(
     async def lifespan(_app: FastAPI):
         if enable_outbox_worker:
             await service.start_outbox_worker(interval_sec=outbox_interval_sec)
+        if enable_maintenance_worker:
+            await service.start_maintenance_worker(
+                interval_sec=maintenance_interval_sec,
+                min_episodes_to_compact=maintenance_min_episodes_to_compact,
+                min_overflow_confidence=maintenance_min_overflow_confidence,
+                run_immediately=maintenance_run_immediately,
+            )
         try:
             if (
                 mcp_server is not None
@@ -193,12 +205,14 @@ def create_memory_platform_app(
             else:
                 yield
         finally:
+            if enable_maintenance_worker:
+                await service.stop_maintenance_worker()
             if enable_outbox_worker:
                 await service.stop_outbox_worker()
 
     app = FastAPI(
         title="ADK Enterprise Composite Memory Platform API",
-        version="0.1.6",
+        version="0.2.1",
         description=(
             "Domain-Agnostic Multi-Tenant Memory Service combining Episodic Memory, "
             "Stratified Ontology (TBox), Bi-Temporal Graph KB (ABox), and Reasoning Traces."
@@ -212,6 +226,8 @@ def create_memory_platform_app(
         return {
             "status": "ok",
             "circuit_breaker_state": service.circuit_breaker.state,
+            "maintenance_worker_running": service.maintenance_worker_running,
+            "maintenance_last_stats": service._maintenance_last_stats,
             "registered_domain_packs": sorted(
                 {p.pack_id for p in ont_registrar._domain_packs.values()}
             ),
